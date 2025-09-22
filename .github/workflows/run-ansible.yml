@@ -1,0 +1,62 @@
+name: Deploy Neo4j Config (dev)
+
+on:
+  workflow_dispatch: {}         # Manual trigger in the Actions tab
+  # push:
+  #   branches: [ main ]        # Uncomment to run on push to main
+
+jobs:
+  deploy-dev:
+    runs-on: [self-hosted, ads] # Your runner label
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show runner info (debug)
+        run: |
+          echo "Runner: $(hostname)"
+          uname -a
+          echo "Workspace: $GITHUB_WORKSPACE"
+          ls -la
+
+      - name: Prepare SSH key
+        run: |
+          umask 077
+          echo "${{ secrets.NEO4J_SSH_KEY }}" > "$GITHUB_WORKSPACE/id_rsa"
+          chmod 600 "$GITHUB_WORKSPACE/id_rsa"
+
+      - name: Ensure Python & Ansible available (install if missing)
+        run: |
+          if ! command -v python3 >/dev/null 2>&1; then
+            echo "python3 not found. Please preinstall Python3 on the self-hosted runner." >&2
+            exit 1
+          fi
+          if ! command -v ansible >/dev/null 2>&1; then
+            echo "Ansible not found. Installing to user site..."
+            python3 -m pip install --user --upgrade pip
+            python3 -m pip install --user ansible
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          fi
+          ansible --version
+
+      - name: Run Ansible playbook (dev)
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+          ANSIBLE_BECOME_PASSWORD: "${{ secrets.NEO4J_SUDO_PASSWORD }}"   # optional
+        run: |
+          set -euo pipefail
+          ansible-inventory -i inventories/dev.ini --list
+          ansible-playbook \
+            -i inventories/dev.ini \
+            --key-file "$GITHUB_WORKSPACE/id_rsa" \
+            -u "${{ secrets.NEO4J_SSH_USER }}" \
+            playbooks/neo4j_config.yml
+
+      - name: Cleanup sensitive files
+        if: always()
+        run: |
+          shred -u "$GITHUB_WORKSPACE/id_rsa" || rm -f "$GITHUB_WORKSPACE/id_rsa"
