@@ -16,6 +16,46 @@
     - "{{ playbook_dir }}/../inventories/vars.yml"
 
   pre_tasks:
+   - name: Who am I without become?
+      command: whoami
+      register: me_no_become
+      changed_when: false
+    
+    - name: Who am I with become?
+      become: true
+      become_user: "{{ neo4j_user | default('neo4j') }}"
+      command: whoami
+      register: me_with_become
+      changed_when: false
+    
+    - name: Show users
+      debug:
+        msg:
+          - "ssh user: {{ me_no_become.stdout }}"
+          - "become user: {{ me_with_become.stdout }}"
+    
+    - name: stat neo4j.conf
+      become: true
+      become_user: "{{ neo4j_user | default('neo4j') }}"
+      stat:
+        path: "{{ neo4j_config_file }}"
+      register: cfgstat
+    
+    - name: Show perms
+      debug:
+        msg:
+          - "path={{ neo4j_config_file }}"
+          - "owner={{ cfgstat.stat.pw_name }}, group={{ cfgstat.stat.gr_name }}, mode={{ '%04o' % cfgstat.stat.mode }}"
+          - "readable={{ cfgstat.stat.readable }}, writable={{ cfgstat.stat.writable }}, executable={{ cfgstat.stat.executable }}"
+    
+    - name: Writable check as become user
+      become: true
+      become_user: "{{ neo4j_user | default('neo4j') }}"
+      command: test -w "{{ neo4j_config_file }}"
+      register: writable_check
+      changed_when: false
+      failed_when: writable_check.rc != 0
+
     - name: Precheck | neo4j.conf exists and is writable
       stat:
         path: "{{ neo4j_config_file }}"
