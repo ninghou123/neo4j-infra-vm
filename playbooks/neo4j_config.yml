@@ -50,6 +50,28 @@
       changed_when: false
 
   tasks:
+      - name: Debug | Which config file and value will be used
+        debug:
+          msg:
+            - "neo4j_config_file = {{ neo4j_config_file }}"
+            - "desired retention = {{ config_parameters['dbms.tx_log.rotation.retention_policy'] }}"
+  
+      - name: Backup current config (timestamped)
+        copy:
+          src: "{{ neo4j_config_file }}"
+          dest: "{{ neo4j_config_file }}{{ backup_suffix }}"
+          remote_src: true
+  
+      - name: Ensure desired parameters are present/updated (idempotent)
+        lineinfile:
+          path: "{{ neo4j_config_file }}"
+          regexp: '^(#\s*)?{{ item.key | regex_escape }}\s*=\s*.*$'
+          line: "{{ item.key }}={{ item.value }}"
+          backrefs: yes
+        loop: "{{ config_parameters | dict2items }}"
+        register: edit_results
+      
+  tasks:
     - name: Backup current config (timestamped)
       copy:
         src: "{{ neo4j_config_file }}"
