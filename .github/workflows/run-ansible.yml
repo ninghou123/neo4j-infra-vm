@@ -46,7 +46,7 @@ jobs:
       - name: Run Ansible playbook (dev)
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
-          ANSIBLE_BECOME_PASSWORD: "${{ secrets.NEO4J_SUDO_PASSWORD }}"   # optional
+          ANSIBLE_BECOME_PASSWORD: ${{ secrets.NEO4J_SUDO_PASSWORD }}
         run: |
           set -euo pipefail
           ansible-inventory -i inventories/dev.ini --list
@@ -54,7 +54,10 @@ jobs:
             -i inventories/dev.ini \
             --key-file "$GITHUB_WORKSPACE/id_rsa" \
             -u "${{ secrets.NEO4J_SSH_USER }}" \
+            --become --become-method=sudo \
+            -e ansible_become_password="$ANSIBLE_BECOME_PASSWORD" \
             playbooks/neo4j_config.yml
+
 
       - name: Cleanup sensitive files
         if: always()
