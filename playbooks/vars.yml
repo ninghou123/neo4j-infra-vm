@@ -8,7 +8,7 @@ neo4j_wait_port: 7687
 
 # <<< put YOUR real edits here >>>
 config_parameters:
-  dbms.tx_log.rotation.retention_policy: "80M size"
+  dbms.tx_log.rotation.retention_policy: "50M size"
 
 backup_suffix: ".pre_ansible_{{ lookup('pipe','date +%Y%m%d%H%M%S') }}"
 neo4j_use_service: false
