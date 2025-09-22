@@ -1,6 +1,6 @@
 ---
 - name: Update Neo4j config on dev hosts
-  hosts: neo4j
+  hosts: neo4j            # ← change to your actual group name from the inventory
   become: true
   gather_facts: true
 
@@ -11,7 +11,7 @@
 
   tasks:
     - name: Check if current config exists
-    - stat:
+      stat:
         path: "{{ neo4j_conf_dst }}"
       register: neo4j_conf
 
