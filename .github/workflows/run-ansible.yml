@@ -55,7 +55,7 @@ jobs:
             -u "${{ secrets.NEO4J_SSH_USER }}" \
             --become --become-method=sudo \
             -e ansible_become_password="$ANSIBLE_BECOME_PASSWORD" \
-            -e @vars.yml \
+            -e @inventories/vars.yml \    
             playbooks/Neo4j_update.yml
       
           echo "----- effective line after play -----"
