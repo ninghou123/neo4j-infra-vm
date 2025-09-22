@@ -1,3 +1,4 @@
+# playbooks/Neo4j_update.yml
 ---
 - name: Update Neo4j config on this VM and restart (with safeguards + report)
   hosts: neo4j
@@ -5,17 +6,12 @@
   any_errors_fatal: true
   gather_facts: false
 
-  # Run all tasks as the intended runtime user (default 'neo4j')
   become: true
   become_user: "{{ neo4j_user | default('neo4j') }}"
+  become_method: sudo
 
-  # Pull your path/port settings & parameters from vars.yml
   vars_files:
-    - vars.yml
-
-  # If you prefer to set the run-as user from vars.yml, add:
-  # neo4j_user: neo4j
-  # there. Otherwise this default kicks in.
+    - ../vars.yml
 
   pre_tasks:
     - name: Precheck | Confirm neo4j.conf exists
@@ -157,7 +153,7 @@
         delay: 5
         timeout: 180
 
-    # --- SERVICE MODE (kept for completeness) ---
+    # --- SERVICE MODE ---
     - name: Restart service
       listen: "Restart via service"
       when: (neo4j_use_service | bool)
