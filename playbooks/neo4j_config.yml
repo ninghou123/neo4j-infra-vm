@@ -1,0 +1,31 @@
+---
+- name: Update Neo4j config on dev hosts
+  hosts: neo4j
+  become: true
+  gather_facts: true
+
+  vars:
+    neo4j_conf_dst: /neo4j/test/neo4j.conf
+    neo4j_conf_src: "{{ playbook_dir }}/../config/neo4j.conf"
+    ts: "{{ ansible_date_time.iso8601_basic }}"
+
+  tasks:
+    - name: Check if current config exists
+    - stat:
+        path: "{{ neo4j_conf_dst }}"
+      register: neo4j_conf
+
+    - name: Backup existing config with timestamp (if present)
+      copy:
+        src: "{{ neo4j_conf_dst }}"
+        dest: "{{ neo4j_conf_dst }}.{{ ts }}"
+        remote_src: true
+      when: neo4j_conf.stat.exists
+
+    - name: Copy new neo4j.conf from repo to target
+      copy:
+        src: "{{ neo4j_conf_src }}"
+        dest: "{{ neo4j_conf_dst }}"
+        owner: neo4j
+        group: neo4j
+        mode: '0644'
