@@ -6,7 +6,10 @@ on:
 
 jobs:
   run:
-    runs-on: [self-hosted]   # your runner label(s)
+    runs-on: [self-hosted]   # add extra labels if your runner needs them
+    env:
+      # Ensure your ansible.cfg in inventories/ is used
+      ANSIBLE_CONFIG: inventories/ansible.cfg
     defaults:
       run:
         shell: bash
@@ -20,6 +23,8 @@ jobs:
           echo "Runner: $(hostname)"
           echo "Workspace: $GITHUB_WORKSPACE"
           uname -a
+          echo "Repo tree:"
+          ls -R
 
       - name: Prepare SSH key
         run: |
@@ -27,8 +32,6 @@ jobs:
           echo "${{ secrets.NEO4J_SSH_KEY }}" > "$GITHUB_WORKSPACE/id_rsa"
           chmod 600 "$GITHUB_WORKSPACE/id_rsa"
 
-      # If your self-hosted runner doesn't already have Ansible preinstalled,
-      # keep this step. Otherwise, you can remove it to speed things up.
       - name: Ensure Ansible available (install if missing)
         run: |
           if ! command -v ansible >/dev/null 2>&1; then
@@ -40,7 +43,9 @@ jobs:
 
       - name: Sanity checks
         run: |
+          # Inventory is under inventories/dev.ini
           ansible-inventory -i inventories/dev.ini --list
+          # Syntax check the playbook path
           ansible-playbook -i inventories/dev.ini playbooks/Neo4j_update.yml --syntax-check
 
       - name: Run Ansible playbook (dev)
@@ -55,14 +60,19 @@ jobs:
             -u "${{ secrets.NEO4J_SSH_USER }}" \
             --become --become-method=sudo \
             -e ansible_become_password="$ANSIBLE_BECOME_PASSWORD" \
-            -e @inventories/vars.yml \    
+            -e @inventories/vars.yml \
             playbooks/Neo4j_update.yml
-      
-          echo "----- effective line after play -----"
-          ssh -i "$GITHUB_WORKSPACE/id_rsa" -o StrictHostKeyChecking=no \
-            "${{ secrets.NEO4J_SSH_USER }}@$(awk '/^\[neo4j\]/{flag=1;next}/^\[/{flag=0}flag && NF{print $1; exit}' inventories/dev.ini)" \
-            "grep -E '^\s*dbms\.tx_log\.rotation\.retention_policy' '{{ lookup('env','NEO4J_CONF_PATH') || '/opt/neo4j/neo4j-enterprise-4.4.45/conf/neo4j.conf' }}' || true"
-      
+
+          # Optional verification using Ansible (NOT raw ssh) so we can use vars
+          echo "----- effective line after play (via Ansible ad-hoc) -----"
+          ansible neo4j \
+            -i inventories/dev.ini \
+            --key-file "$GITHUB_WORKSPACE/id_rsa" \
+            -u "${{ secrets.NEO4J_SSH_USER }}" \
+            --become --become-method=sudo \
+            -e @inventories/vars.yml \
+            -m command \
+            -a "bash -lc \"grep -E '^[[:space:]]*dbms\\.tx_log\\.rotation\\.retention_policy' '{{ neo4j_config_file }}' || true\""
 
       - name: Cleanup sensitive files
         if: always()
