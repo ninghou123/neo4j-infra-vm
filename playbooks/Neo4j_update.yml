@@ -68,6 +68,7 @@
       loop: "{{ config_parameters | dict2items }}"
       register: edit_results
 
+    # In the task that triggers restart:
     - name: Trigger restart if config changed OR force_restart=true
       when: (edit_results.results | selectattr('changed') | list | length) > 0
             or (force_restart | default(false) | bool)
@@ -75,8 +76,11 @@
         msg: "Config changed or force_restart=true → restarting Neo4j"
       changed_when: true
       notify:
-        - Restart via bin
-        - Restart via service
+        - Stop Neo4j          # bin path
+        - Start Neo4j         # bin path
+        - Wait for Bolt       # bin path
+        - Restart service     # service path
+        - Wait for Bolt (svc) # service path
 
     - meta: flush_handlers
 
@@ -132,40 +136,40 @@
       changed_when: false
 
   handlers:
-    # --- BIN MODE ---
+    # --- BIN MODE (unchanged from your fixed version) ---
     - name: Stop Neo4j (bin)
-      listen: "Restart via bin"
+      listen: "Stop Neo4j"
       when: not (neo4j_use_service | bool)
       command: "{{ neo4j_ctl }} stop"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-
+      args: { chdir: "{{ neo4j_bin_dir }}" }
+    
     - name: Start Neo4j (bin)
-      listen: "Restart via bin"
+      listen: "Start Neo4j"
       when: not (neo4j_use_service | bool)
       command: "{{ neo4j_ctl }} start"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-
+      args: { chdir: "{{ neo4j_bin_dir }}" }
+    
     - name: Wait for Bolt (bin)
-      listen: "Restart via bin"
+      listen: "Wait for Bolt"
       when: not (neo4j_use_service | bool)
       wait_for:
         host: "{{ neo4j_wait_host }}"
         port: "{{ neo4j_wait_port }}"
         delay: 5
         timeout: 180
-
-    # --- SERVICE MODE ---
+    
+    # --- SERVICE MODE (split listeners; run as root) ---
     - name: Restart service
-      listen: "Restart via service"
+      listen: "Restart service"
       when: (neo4j_use_service | bool)
+      become: true
+      become_user: root
       service:
         name: "{{ neo4j_service_name }}"
         state: restarted
-
-    - name: Wait for Bolt (service)
-      listen: "Restart via service"
+    
+    - name: Wait for Bolt (svc)
+      listen: "Wait for Bolt (svc)"
       when: (neo4j_use_service | bool)
       wait_for:
         host: "{{ neo4j_wait_host }}"
