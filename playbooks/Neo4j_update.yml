@@ -6,12 +6,14 @@
   any_errors_fatal: true
   gather_facts: false
 
+  # default to the runtime user for file edits; handlers override as needed
   become: true
   become_user: "{{ neo4j_user | default('neo4j') }}"
   become_method: sudo
 
+  # Load your single source of truth for desired settings
   vars_files:
-    - "{{ playbook_dir }}/../inventories/vars.yml"  
+    - "{{ playbook_dir }}/../inventories/vars.yml"
 
   pre_tasks:
     - name: Precheck | Confirm neo4j.conf exists
@@ -49,39 +51,45 @@
       failed_when: false
       changed_when: false
 
-
-
-      
   tasks:
     - name: Backup current config (timestamped)
       copy:
         src: "{{ neo4j_config_file }}"
-        dest: "{{ neo4j_config_file }}{{ backup_suffix }}"
+        dest: "{{ neo4j_config_file }}{{ backup_suffix | default('.pre_ansible_' + lookup('pipe','date +%Y%m%d%H%M%S')) }}"
         remote_src: true
 
+    # Apply ONLY the keys you put in inventories/vars.yml -> config_parameters
+    # ini_file is robust for key=value style configs, and idempotent.
     - name: Ensure desired parameters are present/updated (idempotent)
-      lineinfile:
+      ansible.builtin.ini_file:
         path: "{{ neo4j_config_file }}"
-        regexp: '^(#\s*)?{{ item.key | regex_escape }}\s*=\s*.*$'
-        line: "{{ item.key }}={{ item.value }}"
-        backrefs: yes
-      loop: "{{ config_parameters | dict2items }}"
+        option: "{{ item.key }}"
+        value: "{{ item.value }}"
+        no_extra_spaces: true
+        backup: false
+      loop: "{{ (config_parameters | default({})) | dict2items }}"
       register: edit_results
 
-    # In the task that triggers restart:
+    # Decide if anything changed
+    - name: Compute whether any parameter changed
+      set_fact:
+        changed_any: "{{ (edit_results.results | selectattr('changed') | list | length) > 0 }}"
+      changed_when: false
+
+    # Trigger restart sequence only if needed (or force via -e force_restart=true)
     - name: Trigger restart if config changed OR force_restart=true
-      when: (edit_results.results | selectattr('changed') | list | length) > 0
-            or (force_restart | default(false) | bool)
+      when: changed_any or (force_restart | default(false) | bool)
       debug:
-        msg: "Config changed or force_restart=true → restarting Neo4j"
+        msg: "Config changed={{ changed_any }} or force_restart=true → restarting Neo4j"
       changed_when: true
       notify:
-        - Stop Neo4j          # bin path
-        - Start Neo4j         # bin path
+        - Stop Neo4j
+        - Start Neo4j
         - Wait until running
-        - Wait for Bolt       # bin path
-        - Restart service     # service path
-        - Wait for Bolt (svc) # service path
+        - Wait for Bolt
+        - Restart service
+        - Wait until running (svc)
+        - Wait for Bolt (svc)
 
     - meta: flush_handlers
 
@@ -116,7 +124,7 @@
           neo4j_home: {{ neo4j_home }}
           conf: {{ neo4j_config_file }}
           ctl: {{ neo4j_ctl }}
-          wait target: {{ neo4j_wait_host }}:{{ neo4j_wait_port }}
+          wait target: {{ neo4j_wait_host | default(inventory_hostname) }}:{{ neo4j_wait_port }}
 
           changed params: {{
             (edit_results.results | selectattr('changed') | map(attribute='item.key') | list) | join(', ')
@@ -136,7 +144,8 @@
           {{ tail_debug_log.stdout | default('') }}
       changed_when: false
 
-    # --- BIN MODE (tarball script) ---
+  handlers:
+    # --- BIN MODE (tarball script under {{ neo4j_bin_dir }}) ---
     - name: Stop Neo4j (bin)
       listen: "Stop Neo4j"
       when: not (neo4j_use_service | bool)
@@ -144,9 +153,9 @@
       args:
         chdir: "{{ neo4j_bin_dir }}"
       register: stop_out
-      failed_when: false         # ok if it was already stopped
+      failed_when: false     # ok if already stopped
       changed_when: stop_out.rc == 0
-    
+
     - name: Start Neo4j (bin)
       listen: "Start Neo4j"
       when: not (neo4j_use_service | bool)
@@ -155,17 +164,7 @@
         chdir: "{{ neo4j_bin_dir }}"
       register: start_out
       changed_when: true
-      
-    - name: Show start output (bin)
-      listen: "Start Neo4j"
-      when: not (neo4j_use_service | bool)
-      debug:
-        msg: |
-          stdout: {{ start_out.stdout | default('') }}
-          stderr: {{ start_out.stderr | default('') }}
-          rc: {{ start_out.rc | default('n/a') }}
 
-    
     - name: Wait until running (bin)
       listen: "Wait until running"
       when: not (neo4j_use_service | bool)
@@ -173,11 +172,11 @@
       args:
         chdir: "{{ neo4j_bin_dir }}"
       register: status_check
-      retries: 40            # ~200s
+      retries: 40           # ~200s
       delay: 5
       until: status_check.rc == 0
       changed_when: false
-    
+
     - name: Wait for Bolt (bin)
       listen: "Wait for Bolt"
       when: not (neo4j_use_service | bool)
@@ -187,8 +186,7 @@
         delay: 5
         timeout: 600
       changed_when: false
-    
-    
+
     # --- SERVICE MODE (systemd) ---
     - name: Restart service
       listen: "Restart service"
@@ -196,27 +194,26 @@
       become: true
       become_user: root
       service:
-        name: "{{ neo4j_service_name }}"
+        name: "{{ neo4j_service_name | default('neo4j') }}"
         state: restarted
-    
+
     - name: Wait until running (svc)
-      listen: "Wait until running"
+      listen: "Wait until running (svc)"
       when: (neo4j_use_service | bool)
       become: true
       become_user: root
-      command: systemctl is-active "{{ neo4j_service_name }}"
+      command: systemctl is-active "{{ neo4j_service_name | default('neo4j') }}"
       register: svc_active
       retries: 40
       delay: 5
       until: svc_active.stdout.strip() == "active"
       changed_when: false
-    
+
     - name: Wait for Bolt (svc)
-      listen: "Wait for Bolt"
+      listen: "Wait for Bolt (svc)"
       when: (neo4j_use_service | bool)
       wait_for:
         port: "{{ neo4j_wait_port }}"
         delay: 5
         timeout: 600
       changed_when: false
-
