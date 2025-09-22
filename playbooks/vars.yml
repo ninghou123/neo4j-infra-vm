@@ -1,15 +1,1 @@
-neo4j_home: "/opt/neo4j/neo4j-enterprise-4.4.45"
-neo4j_config_file: "{{ neo4j_home }}/conf/neo4j.conf"
-neo4j_bin_dir: "{{ neo4j_home }}/bin"
-neo4j_ctl: "{{ neo4j_bin_dir }}/neo4j"
 
-neo4j_wait_host: "192.168.56.103"
-neo4j_wait_port: 7687
-
-# <<< put YOUR real edits here >>>
-config_parameters:
-  dbms.tx_log.rotation.retention_policy: "150M size"
-
-backup_suffix: ".pre_ansible_{{ lookup('pipe','date +%Y%m%d%H%M%S') }}"
-neo4j_use_service: false
-neo4j_service_name: neo4j
