@@ -1,13 +1,12 @@
-name: Deploy Neo4j Config (dev)
+# .github/workflows/run-ansible.yml
+name: Neo4j config update (dev)
 
 on:
-  workflow_dispatch: {}         # Manual trigger in the Actions tab
-  # push:
-  #   branches: [ main ]        # Uncomment to run on push to main
+  workflow_dispatch: {}
 
 jobs:
-  deploy-dev:
-    runs-on: [self-hosted] # Your runner label
+  run:
+    runs-on: [self-hosted, ads]   # your runner label(s)
     defaults:
       run:
         shell: bash
@@ -19,9 +18,8 @@ jobs:
       - name: Show runner info (debug)
         run: |
           echo "Runner: $(hostname)"
-          uname -a
           echo "Workspace: $GITHUB_WORKSPACE"
-          ls -la
+          uname -a
 
       - name: Prepare SSH key
         run: |
@@ -29,19 +27,21 @@ jobs:
           echo "${{ secrets.NEO4J_SSH_KEY }}" > "$GITHUB_WORKSPACE/id_rsa"
           chmod 600 "$GITHUB_WORKSPACE/id_rsa"
 
-      - name: Ensure Python & Ansible available (install if missing)
+      # If your self-hosted runner doesn't already have Ansible preinstalled,
+      # keep this step. Otherwise, you can remove it to speed things up.
+      - name: Ensure Ansible available (install if missing)
         run: |
-          if ! command -v python3 >/dev/null 2>&1; then
-            echo "python3 not found. Please preinstall Python3 on the self-hosted runner." >&2
-            exit 1
-          fi
           if ! command -v ansible >/dev/null 2>&1; then
-            echo "Ansible not found. Installing to user site..."
             python3 -m pip install --user --upgrade pip
             python3 -m pip install --user ansible
             echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           fi
           ansible --version
+
+      - name: Sanity checks
+        run: |
+          ansible-inventory -i inventories/dev.ini --list
+          ansible-playbook -i inventories/dev.ini playbooks/Neo4j_update.yml --syntax-check
 
       - name: Run Ansible playbook (dev)
         env:
@@ -49,17 +49,14 @@ jobs:
           ANSIBLE_BECOME_PASSWORD: ${{ secrets.NEO4J_SUDO_PASSWORD }}
         run: |
           set -euo pipefail
-          ansible-inventory -i inventories/dev.ini --list
           ansible-playbook \
             -i inventories/dev.ini \
             --key-file "$GITHUB_WORKSPACE/id_rsa" \
             -u "${{ secrets.NEO4J_SSH_USER }}" \
             --become --become-method=sudo \
             -e ansible_become_password="$ANSIBLE_BECOME_PASSWORD" \
-            playbooks/neo4j_config.yml
-
+            playbooks/Neo4j_update.yml
 
       - name: Cleanup sensitive files
         if: always()
-        run: |
-          shred -u "$GITHUB_WORKSPACE/id_rsa" || rm -f "$GITHUB_WORKSPACE/id_rsa"
+        run: shred -u "$GITHUB_WORKSPACE/id_rsa" || rm -f "$GITHUB_WORKSPACE/id_rsa"
