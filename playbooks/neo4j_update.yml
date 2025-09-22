@@ -49,32 +49,7 @@
       failed_when: false
       changed_when: false
 
-  tasks:
-    - name: Set retention with ini_file (safer for key=value files)
-      ansible.builtin.ini_file:
-        path: "{{ neo4j_config_file }}"
-        option: "dbms.tx_log.rotation.retention_policy"
-        value: "{{ config_parameters['dbms.tx_log.rotation.retention_policy'] }}"
-        no_extra_spaces: true
-        backup: false
-      register: retention_edit
 
-    - name: Trigger restart if config changed OR force_restart=true
-      when: retention_edit is changed or (force_restart | default(false) | bool)
-      debug:
-        msg: "Config changed or force_restart=true → restarting Neo4j"
-      changed_when: true
-      notify:
-        - Restart via bin
-        - Restart via service
-
-    - name: Verify final value on remote
-      command: bash -lc "grep -E '^[[:space:]]*dbms\\.tx_log\\.rotation\\.retention_policy' '{{ neo4j_config_file }}' || true"
-      register: final_line
-      changed_when: false
-
-    - debug:
-        var: final_line.stdout
 
       
   tasks:
