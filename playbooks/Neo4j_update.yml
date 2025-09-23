@@ -1,3 +1,4 @@
+---
 - name: Update Neo4j config on this VM and restart (with safeguards + report)
   hosts: neo4j
   serial: 1
@@ -157,7 +158,7 @@
           {{ tail_debug_log.stdout | default('') }}
       changed_when: false
 
- handlers:
+  handlers:
     # -------- BIN MODE (tarball script) --------
     - name: Stop Neo4j (bin)
       listen: "restart neo4j (bin)"
@@ -199,7 +200,6 @@
         timeout: 600
       changed_when: false
 
-    # <<< THIS is the instrumented start >>>
     - name: Start Neo4j (bin)
       listen: "restart neo4j (bin)"
       when: not (neo4j_use_service | bool)
@@ -254,10 +254,9 @@
       wait_for:
         port: "{{ neo4j_wait_port }}"
         state: started
-        timeout: 100
+        timeout: 600
       changed_when: false
 
-    # Helpful immediate verification after start (process + port + logs)
     - name: Verify process & port (bin)
       listen: "restart neo4j (bin)"
       when: not (neo4j_use_service | bool)
@@ -329,5 +328,5 @@
       wait_for:
         port: "{{ neo4j_wait_port }}"
         state: started
-        timeout: 100
+        timeout: 600
       changed_when: false
