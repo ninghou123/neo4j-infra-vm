@@ -49,11 +49,23 @@ jobs:
           ansible-inventory -i inventories/dev.ini --list
           ansible-playbook -i inventories/dev.ini playbooks/Neo4j_update.yml --syntax-check
 
+      # Optional: verify JAVA_HOME and java on the remote host before running the play
+      - name: Debug remote JAVA_HOME
+        run: |
+          ansible neo4j \
+            -i inventories/dev.ini \
+            --key-file "$GITHUB_WORKSPACE/id_rsa" \
+            -u "${{ secrets.NEO4J_SSH_USER }}" \
+            --become --become-method=sudo \
+            -e @inventories/vars.yml \
+            -m command \
+            -a 'bash -lc "echo JAVA_HOME=$JAVA_HOME; which java; java -version"'
+
       - name: Run Ansible playbook (dev)
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
           ANSIBLE_BECOME_PASSWORD: ${{ secrets.NEO4J_SUDO_PASSWORD }}
-          JAVA_HOME: ${{ env.JAVA_HOME }}   # pass JAVA_HOME to Ansible as well
+          JAVA_HOME: ${{ env.JAVA_HOME }}   # pass JAVA_HOME to Ansible subprocesses
         run: |
           set -euo pipefail
           ansible-playbook \
@@ -74,3 +86,7 @@ jobs:
             -e @inventories/vars.yml \
             -m command \
             -a "bash -lc \"grep -E '^[[:space:]]*dbms\\.tx_log\\.rotation\\.retention_policy' '{{ neo4j_config_file }}' || true\""
+
+      - name: Cleanup sensitive files
+        if: always()
+        run: shred -u "$GITHUB_WORKSPACE/id_rsa" || rm -f "$GITHUB_WORKSPACE/id_rsa"
