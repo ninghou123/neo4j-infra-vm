@@ -157,7 +157,7 @@
           {{ tail_debug_log.stdout | default('') }}
       changed_when: false
 
-   handlers:
+ handlers:
     # -------- BIN MODE (tarball script) --------
     - name: Stop Neo4j (bin)
       listen: "restart neo4j (bin)"
