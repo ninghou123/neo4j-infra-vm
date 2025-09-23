@@ -6,16 +6,14 @@
   any_errors_fatal: true
   gather_facts: false
 
-  # Edit files as the runtime user; handlers override as needed
   become: true
   become_user: "{{ neo4j_user | default('neo4j') }}"
   become_method: sudo
 
-  # Load desired settings & paths
   vars_files:
     - "{{ playbook_dir }}/../inventories/vars.yml"
 
-  # Environment for tarball/bin installs (JAVA_HOME can also come from vars.yml as 'java_home')
+  # Environment for tarball/bin installs; override JAVA_HOME via vars.yml (java_home) if needed
   vars:
     neo4j_env:
       NEO4J_HOME: "{{ neo4j_home }}"
@@ -90,8 +88,13 @@
         msg: "Config changed → restarting Neo4j"
       changed_when: true
       notify:
-        - Restart Neo4j (bin)
-        - Restart Neo4j service   # harmless when neo4j_use_service=false
+        - Stop Neo4j (bin)
+        - Start Neo4j (bin)
+        - Wait until running (bin)
+        - Wait for Bolt (bin)
+        - Restart service
+        - Wait until running (svc)
+        - Wait for Bolt (svc)
 
     - meta: flush_handlers
 
@@ -150,102 +153,71 @@
       changed_when: false
 
   handlers:
-    # One composite handler for tarball/bin installs
-    - name: Restart Neo4j (bin)
-      listen: "Restart Neo4j (bin)"
+    # -------- BIN MODE (tarball script) --------
+    - name: Stop Neo4j (bin)
       when: not (neo4j_use_service | bool)
-      become: true
-      become_user: "{{ neo4j_user | default('neo4j') }}"
       environment: "{{ neo4j_env }}"
-      block:
-        - name: Stop
-          command: "{{ neo4j_ctl }} stop"
-          args:
-            chdir: "{{ neo4j_bin_dir }}"
-          register: stop_out
-          failed_when: false
-          changed_when: stop_out.rc == 0
+      command: "{{ neo4j_ctl }} stop"
+      args:
+        chdir: "{{ neo4j_bin_dir }}"
+      register: stop_out
+      failed_when: false
+      changed_when: stop_out.rc == 0
 
-        - name: Start
-          command: "{{ neo4j_ctl }} start"
-          args:
-            chdir: "{{ neo4j_bin_dir }}"
-          register: start_out
+    - name: Start Neo4j (bin)
+      when: not (neo4j_use_service | bool)
+      environment: "{{ neo4j_env }}"
+      command: "{{ neo4j_ctl }} start"
+      args:
+        chdir: "{{ neo4j_bin_dir }}"
+      register: start_out
+      changed_when: true
 
-        - name: Show start output
-          debug:
-            msg: |
-              START rc={{ start_out.rc | default('n/a') }}
-              stdout:
-              {{ start_out.stdout | default('') }}
-              stderr:
-              {{ start_out.stderr | default('') }}
+    - name: Wait until running (bin)
+      when: not (neo4j_use_service | bool)
+      environment: "{{ neo4j_env }}"
+      command: "{{ neo4j_ctl }} status"
+      args:
+        chdir: "{{ neo4j_bin_dir }}"
+      register: status_check
+      retries: 60
+      delay: 5
+      until: status_check.rc == 0
+      changed_when: false
 
-        - name: Check ps for neo4j/java
-          command: bash -lc "ps -eo pid,cmd | grep -E '[n]eo4j|java.*neo4j' || true"
-          register: ps_out
-          changed_when: false
-        - debug:
-            var: ps_out.stdout
+    - name: Wait for Bolt (bin)
+      when: not (neo4j_use_service | bool)
+      wait_for:
+        # Check on the remote host by omitting 'host'
+        port: "{{ neo4j_wait_port }}"
+        delay: 5
+        timeout: 600
+      changed_when: false
 
-        - name: Wait until status OK
-          command: "{{ neo4j_ctl }} status"
-          args:
-            chdir: "{{ neo4j_bin_dir }}"
-          register: status_check
-          retries: 60
-          delay: 5
-          until: status_check.rc == 0
-          changed_when: false
-
-        - name: Wait for Bolt (remote)
-          wait_for:
-            # remote check; omit host so it tests on the target itself
-            port: "{{ neo4j_wait_port }}"
-            delay: 5
-            timeout: 600
-          changed_when: false
-
-      rescue:
-        - name: Tail neo4j.log after failed start
-          command: "tail -n 200 {{ neo4j_home }}/logs/neo4j.log"
-          register: neo4j_log_tail
-          changed_when: false
-          failed_when: false
-        - debug: var=neo4j_log_tail.stdout
-
-        - name: Tail debug.log after failed start
-          command: "tail -n 200 {{ neo4j_home }}/logs/debug.log"
-          register: neo4j_dbg_tail
-          changed_when: false
-          failed_when: false
-        - debug: var=neo4j_dbg_tail.stdout
-
-        - name: Fail the handler explicitly
-          fail:
-            msg: "neo4j start did not succeed. See start_out/ps_out/log tails above."
-
-    # Systemd path (only runs when neo4j_use_service=true)
-    - name: Restart Neo4j service
-      listen: "Restart Neo4j service"
+    # -------- SERVICE MODE (systemd) --------
+    - name: Restart service
       when: (neo4j_use_service | bool)
       become: true
       become_user: root
-      block:
-        - name: Restart via systemd
-          service:
-            name: "{{ neo4j_service_name | default('neo4j') }}"
-            state: restarted
-        - name: Wait until active
-          command: systemctl is-active "{{ neo4j_service_name | default('neo4j') }}"
-          register: svc_active
-          retries: 60
-          delay: 5
-          until: svc_active.stdout.strip() == "active"
-          changed_when: false
-        - name: Wait for Bolt (remote)
-          wait_for:
-            port: "{{ neo4j_wait_port }}"
-            delay: 5
-            timeout: 600
-          changed_when: false
+      service:
+        name: "{{ neo4j_service_name | default('neo4j') }}"
+        state: restarted
+
+    - name: Wait until running (svc)
+      when: (neo4j_use_service | bool)
+      become: true
+      become_user: root
+      command: systemctl is-active "{{ neo4j_service_name | default('neo4j') }}"
+      register: svc_active
+      retries: 60
+      delay: 5
+      until: svc_active.stdout.strip() == "active"
+      changed_when: false
+
+    - name: Wait for Bolt (svc)
+      when: (neo4j_use_service | bool)
+      wait_for:
+        port: "{{ neo4j_wait_port }}"
+        delay: 5
+        timeout: 600
+      changed_when: false
