@@ -51,6 +51,8 @@ jobs:
 
       # Optional: verify JAVA_HOME and java on the remote host before running the play
       - name: Debug remote JAVA_HOME
+        env:
+          ANSIBLE_BECOME_PASSWORD: ${{ secrets.NEO4J_SUDO_PASSWORD }}
         run: |
           ansible neo4j \
             -i inventories/dev.ini \
