@@ -1,5 +1,5 @@
 ---
-- name: Diagnose why Neo4j dies after start (bin mode)
+- name: Start Neo4j only (bin mode)
   hosts: neo4j
   gather_facts: false
 
@@ -18,92 +18,12 @@
       JAVA_HOME: "{{ java_home }}"
 
   tasks:
-    - name: Show Java version & paths
+    - name: Start Neo4j (bin) with ./neo4j start
+      when: not (neo4j_use_service | bool)
+      become: true
+      become_user: neo4j
+      become_flags: "-i"
       environment: "{{ neo4j_env }}"
-      shell: |
-        set -e
-        echo "JAVA_HOME=${JAVA_HOME}"
-        which java || true
-        java -version
-      args: { executable: /bin/bash }
-      register: java_info
-      changed_when: false
-
-    - name: Check key directory ownership & writability
-      shell: |
-        set -e
-        for d in "{{ neo4j_home }}/data" "{{ neo4j_home }}/logs" "{{ neo4j_home }}/run" "{{ neo4j_home }}/plugins"; do
-          printf "%-60s: " "$d"
-          if [ -d "$d" ]; then
-            stat -c "owner=%U group=%G mode=%a writable=$([ -w "$d" ] && echo yes || echo no)" "$d"
-          else
-            echo "MISSING"
-          fi
-        done
-      args: { executable: /bin/bash }
-      register: perms
-      changed_when: false
-
-    - name: Check for stale PID file
-      shell: |
-        set -e
-        pidf="{{ neo4j_home }}/run/neo4j.pid"
-        if [ -f "$pidf" ]; then
-          pid=$(cat "$pidf" || true)
-          if [ -n "$pid" ] && ps -p "$pid" >/dev/null 2>&1; then
-            echo "PID file exists and process $pid is running."
-          else
-            echo "STALE PID FILE: $pidf contains '$pid' but process not running."
-          fi
-        else
-          echo "No PID file."
-        fi
-      args: { executable: /bin/bash }
-      register: pid_check
-      changed_when: false
-
-    - name: Check port conflicts (7474 http, 7687 bolt)
-      shell: |
-        ss -ltnp | awk 'NR==1 || $4 ~ /:(7474|7687)$/'
-      args: { executable: /bin/bash }
-      register: ports
-      changed_when: false
-      failed_when: false
-
-    - name: Tail recent errors from logs
-      shell: |
-        set -e
-        for f in "{{ neo4j_home }}/logs/neo4j.log" "{{ neo4j_home }}/logs/debug.log"; do
-          echo "----- $f -----"
-          if [ -f "$f" ]; then
-            grep -E 'ERROR|FATAL|Exception|Caused by' "$f" | tail -n 80 || true
-            echo
-            echo "Last 80 lines:"
-            tail -n 80 "$f" || true
-          else
-            echo "missing"
-          fi
-          echo
-        done
-      args: { executable: /bin/bash }
-      register: log_errs
-      changed_when: false
-
-    - name: Summarize findings
-      debug:
-        msg: |
-          === JAVA ===
-          {{ java_info.stdout | default('') }}
-          {{ java_info.stderr | default('') }}
-
-          === PERMISSIONS ===
-          {{ perms.stdout | default('') }}
-
-          === PID ===
-          {{ pid_check.stdout | default('') }}
-
-          === PORTS ===
-          {{ ports.stdout | default('') }}
-
-          === LOG EXCERPTS ===
-          {{ log_errs.stdout | default('') }}
+      command: ./neo4j start
+      args:
+        chdir: "{{ neo4j_bin_dir }}"
