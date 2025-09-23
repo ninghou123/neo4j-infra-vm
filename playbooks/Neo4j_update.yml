@@ -76,20 +76,12 @@
         changed_any: "{{ (edit_results.results | selectattr('changed') | list | length) > 0 }}"
       changed_when: false
 
-    # Trigger restart sequence only if needed (or force via -e force_restart=true)
-    - name: Trigger restart if config changed OR force_restart=true
-      when: changed_any or (force_restart | default(false) | bool)
+    - name: Trigger restart if config changed
       debug:
-        msg: "Config changed={{ changed_any }} or force_restart=true → restarting Neo4j"
+        msg: "Config changed, restarting"
+      when: edit_results is defined and (edit_results.results | selectattr('changed') | list | length) > 0
       changed_when: true
-      notify:
-        - Stop Neo4j
-        - Start Neo4j
-        - Wait until running
-        - Wait for Bolt
-        - Restart service
-        - Wait until running (svc)
-        - Wait for Bolt (svc)
+      notify: Restart via bin
 
     - meta: flush_handlers
 
@@ -145,75 +137,43 @@
       changed_when: false
 
   handlers:
-    # --- BIN MODE (tarball script under {{ neo4j_bin_dir }}) ---
+      # --- BIN MODE ---
     - name: Stop Neo4j (bin)
-      listen: "Stop Neo4j"
+      listen: "Restart via bin"
       when: not (neo4j_use_service | bool)
       command: "{{ neo4j_ctl }} stop"
       args:
         chdir: "{{ neo4j_bin_dir }}"
-      register: stop_out
-      failed_when: false     # ok if already stopped
-      changed_when: stop_out.rc == 0
-
+  
     - name: Start Neo4j (bin)
-      listen: "Start Neo4j"
+      listen: "Restart via bin"
       when: not (neo4j_use_service | bool)
       command: "{{ neo4j_ctl }} start"
       args:
         chdir: "{{ neo4j_bin_dir }}"
-      register: start_out
-      changed_when: true
-
-    - name: Wait until running (bin)
-      listen: "Wait until running"
-      when: not (neo4j_use_service | bool)
-      command: "{{ neo4j_ctl }} status"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-      register: status_check
-      retries: 40           # ~200s
-      delay: 5
-      until: status_check.rc == 0
-      changed_when: false
-
+  
     - name: Wait for Bolt (bin)
-      listen: "Wait for Bolt"
+      listen: "Restart via bin"
       when: not (neo4j_use_service | bool)
       wait_for:
-        # Run on the REMOTE; omit 'host' so it checks the target’s own socket
+        host: "{{ neo4j_wait_host }}"
         port: "{{ neo4j_wait_port }}"
         delay: 5
-        timeout: 600
-      changed_when: false
-
-    # --- SERVICE MODE (systemd) ---
+        timeout: 180
+  
+    # --- SERVICE MODE (unused for you, but kept for completeness) ---
     - name: Restart service
-      listen: "Restart service"
+      listen: "Restart via service"
       when: (neo4j_use_service | bool)
-      become: true
-      become_user: root
       service:
-        name: "{{ neo4j_service_name | default('neo4j') }}"
+        name: "{{ neo4j_service_name }}"
         state: restarted
-
-    - name: Wait until running (svc)
-      listen: "Wait until running (svc)"
-      when: (neo4j_use_service | bool)
-      become: true
-      become_user: root
-      command: systemctl is-active "{{ neo4j_service_name | default('neo4j') }}"
-      register: svc_active
-      retries: 40
-      delay: 5
-      until: svc_active.stdout.strip() == "active"
-      changed_when: false
-
-    - name: Wait for Bolt (svc)
-      listen: "Wait for Bolt (svc)"
+  
+    - name: Wait for Bolt (service)
+      listen: "Restart via service"
       when: (neo4j_use_service | bool)
       wait_for:
+        host: "{{ neo4j_wait_host }}"
         port: "{{ neo4j_wait_port }}"
         delay: 5
-        timeout: 600
-      changed_when: false
+        timeout: 180
