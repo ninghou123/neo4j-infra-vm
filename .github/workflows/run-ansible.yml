@@ -55,6 +55,8 @@ jobs:
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
           ANSIBLE_BECOME_PASSWORD: ${{ secrets.NEO4J_SUDO_PASSWORD }}
+          # Optional: set this so the grep uses it (otherwise it falls back to the default below)
+          NEO4J_CONF_PATH: /opt/neo4j/neo4j-enterprise-4.4.45/conf/neo4j.conf
         run: |
           set -euo pipefail
           ansible-playbook \
@@ -66,11 +68,12 @@ jobs:
             -e neo4j_become=true -e neo4j_become_user=neo4j \
             -e "@inventories/vars.yml" \
             playbooks/Neo4j_update.yml
-      
+
           echo "----- effective line after play -----"
           ssh -i "$GITHUB_WORKSPACE/id_rsa" -o StrictHostKeyChecking=no \
             "${{ secrets.NEO4J_SSH_USER }}@$(awk '/^\[neo4j\]/{flag=1;next}/^\[/{flag=0}flag && NF{print $1; exit}' inventories/dev.ini)" \
-            "grep -E '^\s*dbms\.tx_log\.rotation\.retention_policy' '{{ lookup('env','NEO4J_CONF_PATH') || '/opt/neo4j/neo4j-enterprise-4.4.45/conf/neo4j.conf' }}' || true"
+            "grep -E '^\s*dbms\.tx_log\.rotation\.retention_policy' \"\${NEO4J_CONF_PATH:-/opt/neo4j/neo4j-enterprise-4.4.45/conf/neo4j.conf}\" || true"
+    
       - name: Cleanup sensitive files
         if: always()
         run: shred -u "$GITHUB_WORKSPACE/id_rsa" || rm -f "$GITHUB_WORKSPACE/id_rsa"
