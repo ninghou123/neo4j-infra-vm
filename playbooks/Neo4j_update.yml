@@ -208,6 +208,15 @@
       until: status_check.rc == 0
       changed_when: false
     
+    - name: Wait for Bolt (bin)
+      when: not (neo4j_use_service | bool)
+      wait_for:
+        # Check on the remote host by omitting 'host'
+        port: "{{ neo4j_wait_port }}"
+        delay: 5
+        timeout: 600
+      changed_when: false
+      
     # -------- SERVICE MODE (systemd) --------
     - name: Restart service
       when: (neo4j_use_service | bool)
