@@ -8,7 +8,8 @@
 
   become: "{{ neo4j_become }}"
   become_user: "{{ neo4j_become_user }}"
-
+  become_flags: "-i" 
+  
   vars_files:
     - "{{ playbook_dir }}/../inventories/vars.yml"
 
@@ -30,7 +31,15 @@
       stat:
         path: "{{ neo4j_ctl }}"
       register: cli
-
+      
+    - name: Who am I (effective)?
+      become: true
+      become_user: "{{ neo4j_become_user }}"
+      become_flags: "-i"
+      command: bash -lc 'echo "whoami=$(whoami) id=$(id -u) home=$HOME user=$USER"'
+      register: whoami_out
+      changed_when: false
+  
     - name: Precheck | Fail early if files missing
       fail:
         msg: >-
@@ -151,27 +160,30 @@
           {{ tail_debug_log.stdout | default('') }}
       changed_when: false
 
-  handlers:
-    # -------- BIN MODE (tarball script) --------
+    handlers:
     - name: Stop Neo4j (bin)
       when: not (neo4j_use_service | bool)
+      become: true
+      become_user: neo4j
+      become_flags: "-i"
       environment: "{{ neo4j_env }}"
       command: "{{ neo4j_ctl }} stop"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
+      args: { chdir: "{{ neo4j_bin_dir }}" }
       register: stop_out
       failed_when: false
       changed_when: stop_out.rc == 0
-
+  
     - name: Start Neo4j (bin)
       when: not (neo4j_use_service | bool)
+      become: true
+      become_user: neo4j
+      become_flags: "-i"
       environment: "{{ neo4j_env }}"
       command: "{{ neo4j_ctl }} start"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
+      args: { chdir: "{{ neo4j_bin_dir }}" }
       register: start_out
       changed_when: start_out.rc == 0
-        
+  
     - name: Start Neo4j (bin) debug
       when: not (neo4j_use_service | bool)
       debug:
@@ -181,28 +193,21 @@
           {{ start_out.stdout | default('') }}
           stderr:
           {{ start_out.stderr | default('') }}
-      
+  
     - name: Wait until running (bin)
       when: not (neo4j_use_service | bool)
+      become: true
+      become_user: neo4j
+      become_flags: "-i"
       environment: "{{ neo4j_env }}"
       command: "{{ neo4j_ctl }} status"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
+      args: { chdir: "{{ neo4j_bin_dir }}" }
       register: status_check
       retries: 60
       delay: 5
       until: status_check.rc == 0
       changed_when: false
-
-    - name: Wait for Bolt (bin)
-      when: not (neo4j_use_service | bool)
-      wait_for:
-        # Check on the remote host by omitting 'host'
-        port: "{{ neo4j_wait_port }}"
-        delay: 5
-        timeout: 600
-      changed_when: false
-
+    
     # -------- SERVICE MODE (systemd) --------
     - name: Restart service
       when: (neo4j_use_service | bool)
