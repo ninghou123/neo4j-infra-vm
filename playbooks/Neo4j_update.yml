@@ -1,4 +1,3 @@
-# playbooks/Neo4j_update.yml
 ---
 - name: Update Neo4j config on this VM and restart (with safeguards + report)
   hosts: neo4j
@@ -8,8 +7,8 @@
 
   become: "{{ neo4j_become }}"
   become_user: "{{ neo4j_become_user }}"
-  become_flags: "-i" 
-  
+  become_flags: "-i"
+
   vars_files:
     - "{{ playbook_dir }}/../inventories/vars.yml"
 
@@ -31,15 +30,19 @@
       stat:
         path: "{{ neo4j_ctl }}"
       register: cli
-      
+
     - name: Who am I (effective)?
       become: true
       become_user: "{{ neo4j_become_user }}"
       become_flags: "-i"
-      command: bash -lc 'echo "whoami=$(whoami) id=$(id -u) home=$HOME user=$USER"'
+      command: bash -lc 'echo whoami=$(whoami); id; echo HOME=$HOME USER=$USER'
       register: whoami_out
       changed_when: false
-  
+
+    - name: Show effective user
+      debug:
+        var: whoami_out.stdout_lines
+
     - name: Precheck | Fail early if files missing
       fail:
         msg: >-
@@ -97,6 +100,8 @@
       changed_when: true
       notify:
         - Stop Neo4j (bin)
+        - Wait until stopped (bin)
+        - Wait for Bolt to stop (bin)
         - Start Neo4j (bin)
         - Wait until running (bin)
         - Wait for Bolt (bin)
@@ -161,6 +166,7 @@
       changed_when: false
 
   handlers:
+    # -------- BIN MODE (tarball script) --------
     - name: Stop Neo4j (bin)
       when: not (neo4j_use_service | bool)
       become: true
@@ -168,11 +174,36 @@
       become_flags: "-i"
       environment: "{{ neo4j_env }}"
       command: "{{ neo4j_ctl }} stop"
-      args: { chdir: "{{ neo4j_bin_dir }}" }
+      args:
+        chdir: "{{ neo4j_bin_dir }}"
       register: stop_out
       failed_when: false
       changed_when: stop_out.rc == 0
-  
+
+    - name: Wait until stopped (bin) - status rc != 0
+      when: not (neo4j_use_service | bool)
+      become: true
+      become_user: neo4j
+      become_flags: "-i"
+      environment: "{{ neo4j_env }}"
+      command: "{{ neo4j_ctl }} status"
+      args:
+        chdir: "{{ neo4j_bin_dir }}"
+      register: status_stopped
+      retries: 60
+      delay: 5
+      until: status_stopped.rc != 0
+      failed_when: false
+      changed_when: false
+
+    - name: Wait for Bolt to stop (bin)
+      when: not (neo4j_use_service | bool)
+      wait_for:
+        port: "{{ neo4j_wait_port }}"
+        state: stopped
+        timeout: 600
+      changed_when: false
+
     - name: Start Neo4j (bin)
       when: not (neo4j_use_service | bool)
       become: true
@@ -180,10 +211,11 @@
       become_flags: "-i"
       environment: "{{ neo4j_env }}"
       command: "{{ neo4j_ctl }} start"
-      args: { chdir: "{{ neo4j_bin_dir }}" }
+      args:
+        chdir: "{{ neo4j_bin_dir }}"
       register: start_out
       changed_when: start_out.rc == 0
-  
+
     - name: Start Neo4j (bin) debug
       when: not (neo4j_use_service | bool)
       debug:
@@ -193,7 +225,7 @@
           {{ start_out.stdout | default('') }}
           stderr:
           {{ start_out.stderr | default('') }}
-  
+
     - name: Wait until running (bin)
       when: not (neo4j_use_service | bool)
       become: true
@@ -201,22 +233,23 @@
       become_flags: "-i"
       environment: "{{ neo4j_env }}"
       command: "{{ neo4j_ctl }} status"
-      args: { chdir: "{{ neo4j_bin_dir }}" }
+      args:
+        chdir: "{{ neo4j_bin_dir }}"
       register: status_check
       retries: 60
       delay: 5
       until: status_check.rc == 0
+      failed_when: false
       changed_when: false
-    
+
     - name: Wait for Bolt (bin)
       when: not (neo4j_use_service | bool)
       wait_for:
-        # Check on the remote host by omitting 'host'
         port: "{{ neo4j_wait_port }}"
-        delay: 5
+        state: started
         timeout: 600
       changed_when: false
-      
+
     # -------- SERVICE MODE (systemd) --------
     - name: Restart service
       when: (neo4j_use_service | bool)
@@ -241,6 +274,6 @@
       when: (neo4j_use_service | bool)
       wait_for:
         port: "{{ neo4j_wait_port }}"
-        delay: 5
+        state: started
         timeout: 600
       changed_when: false
