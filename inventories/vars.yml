@@ -3,10 +3,12 @@ neo4j_home: "/opt/neo4j/neo4j-enterprise-4.4.45"
 neo4j_config_file: "{{ neo4j_home }}/conf/neo4j.conf"
 neo4j_bin_dir: "{{ neo4j_home }}/bin"
 neo4j_ctl: "{{ neo4j_bin_dir }}/neo4j"
+neo4j_user: neo4j
 
 # Prefer using the inventory’s value; this is a safe default if used.
 neo4j_wait_host: "{{ hostvars[inventory_hostname].ansible_host | default(inventory_hostname) }}"
 neo4j_wait_port: 7687
+java_home: "/usr/lib/jvm/java-11-openjdk-amd64"
 
 # <<< put YOUR real edits here >>>
 config_parameters:
