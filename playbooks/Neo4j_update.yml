@@ -6,47 +6,47 @@
   any_errors_fatal: true
   gather_facts: false
 
-  # default to the runtime user for file edits; handlers override as needed
   become: true
   become_user: "{{ neo4j_user | default('neo4j') }}"
   become_method: sudo
 
-  # Load your single source of truth for desired settings
   vars_files:
     - "{{ playbook_dir }}/../inventories/vars.yml"
 
+  # <<< important env for tarball installs; adjust JAVA_HOME if needed >>>
+  vars:
+    neo4j_env:
+      NEO4J_HOME: "{{ neo4j_home }}"
+      NEO4J_CONF: "{{ neo4j_home }}/conf"
+      PATH: "{{ neo4j_bin_dir }}:/usr/bin:/bin"
+      JAVA_HOME: "{{ java_home | default('/usr/lib/jvm/java-11-openjdk-amd64') }}"
+
   pre_tasks:
     - name: Precheck | Confirm neo4j.conf exists
-      stat:
-        path: "{{ neo4j_config_file }}"
+      stat: { path: "{{ neo4j_config_file }}" }
       register: cfg
-
     - name: Precheck | Confirm neo4j CLI exists
-      stat:
-        path: "{{ neo4j_ctl }}"
+      stat: { path: "{{ neo4j_ctl }}" }
       register: cli
-
     - name: Precheck | Fail early if files missing
       fail:
         msg: >-
           Missing required file(s):
           {% if not cfg.stat.exists %}neo4j.conf {% endif %}
           {% if not cli.stat.exists %}neo4j CLI{% endif %}.
-          Check neo4j_home/neo4j_config_file/neo4j_ctl.
       when: not cfg.stat.exists or not cli.stat.exists
-
-    - name: Precheck | Config is writable by run-as user
+    - name: Precheck | Config writable by run-as user
       command: test -w "{{ neo4j_config_file }}"
       register: writable_check
       changed_when: false
-
-    - name: Precheck | Fail if config is not writable
+    - name: Precheck | Fail if not writable
       fail:
         msg: "neo4j.conf is not writable by {{ neo4j_user | default('neo4j') }}: {{ neo4j_config_file }}"
       when: writable_check.rc != 0
-
     - name: Capture status BEFORE
+      environment: "{{ neo4j_env }}"
       command: "{{ neo4j_ctl }} status"
+      args: { chdir: "{{ neo4j_bin_dir }}" }
       register: status_before
       failed_when: false
       changed_when: false
@@ -58,35 +58,36 @@
         dest: "{{ neo4j_config_file }}{{ backup_suffix | default('.pre_ansible_' + lookup('pipe','date +%Y%m%d%H%M%S')) }}"
         remote_src: true
 
-    # Apply ONLY the keys you put in inventories/vars.yml -> config_parameters
-    # ini_file is robust for key=value style configs, and idempotent.
     - name: Ensure desired parameters are present/updated (idempotent)
       ansible.builtin.ini_file:
         path: "{{ neo4j_config_file }}"
         option: "{{ item.key }}"
         value: "{{ item.value }}"
         no_extra_spaces: true
-        backup: false
       loop: "{{ (config_parameters | default({})) | dict2items }}"
       register: edit_results
 
-    # Decide if anything changed
     - name: Compute whether any parameter changed
       set_fact:
         changed_any: "{{ (edit_results.results | selectattr('changed') | list | length) > 0 }}"
       changed_when: false
 
     - name: Trigger restart if config changed
-      debug:
-        msg: "Config changed, restarting"
-      when: edit_results is defined and (edit_results.results | selectattr('changed') | list | length) > 0
+      when: changed_any | bool
+      debug: { msg: "Config changed → restarting Neo4j" }
       changed_when: true
-      notify: Restart via bin
+      notify:
+        - Stop Neo4j
+        - Start Neo4j
+        - Wait until running
+        - Wait for Bolt
 
     - meta: flush_handlers
 
     - name: Capture status AFTER
+      environment: "{{ neo4j_env }}"
       command: "{{ neo4j_ctl }} status"
+      args: { chdir: "{{ neo4j_bin_dir }}" }
       register: status_after
       failed_when: false
       changed_when: false
@@ -112,68 +113,53 @@
       set_fact:
         run_report: |-
           Neo4j Ansible run on {{ inventory_hostname }} @ {{ run_ts }}
-          run_as_user: {{ neo4j_user | default('neo4j') }}
-          neo4j_home: {{ neo4j_home }}
-          conf: {{ neo4j_config_file }}
-          ctl: {{ neo4j_ctl }}
-          wait target: {{ neo4j_wait_host | default(inventory_hostname) }}:{{ neo4j_wait_port }}
-
+          BEFORE: {{ status_before.stdout | default('') }}
+          AFTER:  {{ status_after.stdout  | default('') }}
           changed params: {{
             (edit_results.results | selectattr('changed') | map(attribute='item.key') | list) | join(', ')
             if edit_results is defined else 'n/a'
           }}
-
-          ---- status BEFORE ----
-          {{ status_before.stdout | default('') }}
-
-          ---- status AFTER ----
-          {{ status_after.stdout | default('') }}
-
-          ---- tail neo4j.log ----
-          {{ tail_neo4j_log.stdout | default('') }}
-
-          ---- tail debug.log ----
-          {{ tail_debug_log.stdout | default('') }}
       changed_when: false
 
   handlers:
-      # --- BIN MODE ---
+    # --- BIN MODE with unique listeners + env ---
     - name: Stop Neo4j (bin)
-      listen: "Restart via bin"
+      listen: "Stop Neo4j"
       when: not (neo4j_use_service | bool)
+      environment: "{{ neo4j_env }}"
       command: "{{ neo4j_ctl }} stop"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-  
+      args: { chdir: "{{ neo4j_bin_dir }}" }
+      register: stop_out
+      failed_when: false
+      changed_when: stop_out.rc == 0
+
     - name: Start Neo4j (bin)
-      listen: "Restart via bin"
+      listen: "Start Neo4j"
       when: not (neo4j_use_service | bool)
+      environment: "{{ neo4j_env }}"
       command: "{{ neo4j_ctl }} start"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-  
+      args: { chdir: "{{ neo4j_bin_dir }}" }
+      register: start_out
+      changed_when: true
+
+    - name: Wait until running (bin)
+      listen: "Wait until running"
+      when: not (neo4j_use_service | bool)
+      environment: "{{ neo4j_env }}"
+      command: "{{ neo4j_ctl }} status"
+      args: { chdir: "{{ neo4j_bin_dir }}" }
+      register: status_check
+      retries: 60
+      delay: 5
+      until: status_check.rc == 0
+      changed_when: false
+
     - name: Wait for Bolt (bin)
-      listen: "Restart via bin"
+      listen: "Wait for Bolt"
       when: not (neo4j_use_service | bool)
       wait_for:
-        host: "{{ neo4j_wait_host }}"
+        # remote check; omit host so it checks on the target VM itself
         port: "{{ neo4j_wait_port }}"
         delay: 5
-        timeout: 180
-  
-    # --- SERVICE MODE (unused for you, but kept for completeness) ---
-    - name: Restart service
-      listen: "Restart via service"
-      when: (neo4j_use_service | bool)
-      service:
-        name: "{{ neo4j_service_name }}"
-        state: restarted
-  
-    - name: Wait for Bolt (service)
-      listen: "Restart via service"
-      when: (neo4j_use_service | bool)
-      wait_for:
-        host: "{{ neo4j_wait_host }}"
-        port: "{{ neo4j_wait_port }}"
-        delay: 5
-        timeout: 180
+        timeout: 600
+      changed_when: false
