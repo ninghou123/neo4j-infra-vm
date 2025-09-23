@@ -14,7 +14,7 @@ java_home: "/usr/lib/jvm/java-11-openjdk-amd64"
 
 # <<< put YOUR real edits here >>>
 config_parameters:
-  dbms.tx_log.rotation.retention_policy: "120M size"
+  dbms.tx_log.rotation.retention_policy: "100M size"
 
 backup_suffix: ".pre_ansible_{{ lookup('pipe','date +%Y%m%d%H%M%S') }}"
 neo4j_use_service: false
