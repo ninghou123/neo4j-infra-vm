@@ -19,7 +19,7 @@
       NEO4J_HOME: "{{ neo4j_home }}"
       NEO4J_CONF: "{{ neo4j_home }}/conf"
       PATH: "{{ neo4j_bin_dir }}:/usr/bin:/bin"
-      JAVA_HOME: "{{ java_home | default('/usr/lib/jvm/java-11-openjdk-amd64') }}"
+      JAVA_HOME: "{{ java_home }}"
 
   pre_tasks:
     - name: Precheck | Confirm neo4j.conf exists
@@ -166,13 +166,22 @@
 
     - name: Start Neo4j (bin)
       when: not (neo4j_use_service | bool)
+      become: true
+      become_user: "{{ neo4j_user | default('neo4j') }}"
       environment: "{{ neo4j_env }}"
       command: "{{ neo4j_ctl }} start"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
+      args: { chdir: "{{ neo4j_bin_dir }}" }
       register: start_out
-      changed_when: true
-
+      
+    - debug:
+        msg: |
+          START rc={{ start_out.rc | default('n/a') }}
+          stdout:
+          {{ start_out.stdout | default('') }}
+          stderr:
+          {{ start_out.stderr | default('') }}
+      when: not (neo4j_use_service | bool)
+      
     - name: Wait until running (bin)
       when: not (neo4j_use_service | bool)
       environment: "{{ neo4j_env }}"
