@@ -164,14 +164,12 @@
       changed_when: stop_out.rc == 0
 
     - name: Start Neo4j (bin)
+      listen: "Restart via bin"
       when: not (neo4j_use_service | bool)
-      become: true
-      become_user: "{{ neo4j_user | default('neo4j') }}"
-      environment: "{{ neo4j_env }}"
       command: "{{ neo4j_ctl }} start"
-      args: { chdir: "{{ neo4j_bin_dir }}" }
-      register: start_out
-      
+      args:
+        chdir: "{{ neo4j_bin_dir }}"
+        
     - debug:
         msg: |
           START rc={{ start_out.rc | default('n/a') }}
