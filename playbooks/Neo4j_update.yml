@@ -160,7 +160,7 @@
           {{ tail_debug_log.stdout | default('') }}
       changed_when: false
 
-    handlers:
+  handlers:
     - name: Stop Neo4j (bin)
       when: not (neo4j_use_service | bool)
       become: true
