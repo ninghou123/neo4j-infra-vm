@@ -161,8 +161,6 @@
   handlers:
     # -------- BIN MODE (tarball script) --------
     - name: Stop Neo4j (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
       become: true
       become_user: neo4j
       become_flags: "-i"
@@ -174,35 +172,15 @@
       failed_when: false
       changed_when: stop_out.rc == 0
 
-    - name: Wait until stopped (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
-      become: true
-      become_user: neo4j
-      become_flags: "-i"
-      environment: "{{ neo4j_env }}"
-      command: "{{ neo4j_ctl }} status"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-      register: status_stopped
-      retries: 60
-      delay: 5
-      until: status_stopped.rc != 0
-      failed_when: false
-      changed_when: false
 
     - name: Wait for Bolt to stop (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
       wait_for:
         port: "{{ neo4j_wait_port }}"
         state: stopped
-        timeout: 600
+        timeout: 100
       changed_when: false
 
     - name: Start Neo4j (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
       become: true
       become_user: neo4j
       become_flags: "-i"
@@ -231,30 +209,12 @@
           STDERR:
           {{ start_trace.stderr | default('') }}
 
-    - name: Wait until running (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
-      become: true
-      become_user: neo4j
-      become_flags: "-i"
-      environment: "{{ neo4j_env }}"
-      command: "{{ neo4j_ctl }} status"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-      register: status_check
-      retries: 60
-      delay: 5
-      until: status_check.rc == 0
-      failed_when: false
-      changed_when: false
 
     - name: Wait for Bolt (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
       wait_for:
         port: "{{ neo4j_wait_port }}"
         state: started
-        timeout: 600
+        timeout: 100
       changed_when: false
 
     - name: Verify process & port (bin)
@@ -310,17 +270,7 @@
         name: "{{ neo4j_service_name | default('neo4j') }}"
         state: restarted
 
-    - name: Wait until running (svc)
-      listen: "restart neo4j (svc)"
-      when: (neo4j_use_service | bool)
-      become: true
-      become_user: root
-      command: systemctl is-active "{{ neo4j_service_name | default('neo4j') }}"
-      register: svc_active
-      retries: 60
-      delay: 5
-      until: svc_active.stdout.strip() == "active"
-      changed_when: false
+
 
     - name: Wait for Bolt (svc)
       listen: "restart neo4j (svc)"
