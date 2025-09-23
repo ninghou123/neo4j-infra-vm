@@ -6,9 +6,8 @@
   any_errors_fatal: true
   gather_facts: false
 
-  become: true
-  become_user: "{{ neo4j_user | default('neo4j') }}"
-  become_method: sudo
+  become: "{{ neo4j_become }}"
+  become_user: "{{ neo4j_become_user }}"
 
   vars_files:
     - "{{ playbook_dir }}/../inventories/vars.yml"
