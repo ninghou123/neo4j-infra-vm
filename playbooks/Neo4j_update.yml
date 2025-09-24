@@ -79,6 +79,45 @@
           - "cmd={{ neo4j_start.cmd }}"
           - "cwd={{ neo4j_bin_dir }}"
 
+    # --- NEW: Extract PID from "Started ... (pid:NNNN)" ---
+    - name: Extract started PID
+      set_fact:
+        neo4j_pid: "{{ (neo4j_start.stdout | regex_search('pid:(\\d+)', '\\1')) | default('') }}"
+
+    - name: Print extracted PID (if any)
+      debug:
+        msg: "Extracted PID: {{ neo4j_pid | default('N/A') }}"
+
+    # --- NEW: Brief settle so the process can crash if it's going to ---
+    - name: Small delay before process checks
+      wait_for:
+        timeout: 2
+      when: neo4j_pid != ''
+
+    # --- NEW: Check if the PID is still alive ---
+    - name: Check /proc/PID and ps output
+      shell: |
+        set -e
+        PID="{{ neo4j_pid }}"
+        if [ -n "$PID" ] && [ -d "/proc/$PID" ]; then
+          echo "PROC_EXISTS=1"
+          echo "CMDLINE=$(tr '\0' ' ' </proc/$PID/cmdline || true)"
+        else
+          echo "PROC_EXISTS=0"
+        fi
+        echo "--- ps -ef | grep -i neo4j (sanitized) ---"
+        ps -ef | grep -i neo4j | grep -v grep || true
+        echo "--- jps -lv (if available) ---"
+        if command -v jps >/dev/null 2>&1; then jps -lv || true; fi
+      args:
+        executable: /bin/bash
+      register: ps_check
+      changed_when: false
+      failed_when: false
+
+    - name: Print process check output
+      debug:
+        var: ps_check.stdout
     - name: Check Neo4j status (does not fail the play)
       become: true
       become_user: "{{ neo4j_become_user | default('neo4j') }}"
@@ -107,3 +146,4 @@
     - name: Print log tail
       debug:
         var: neo4j_log.stdout
+
