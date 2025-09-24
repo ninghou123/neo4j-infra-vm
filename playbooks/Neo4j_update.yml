@@ -46,7 +46,12 @@
         ls -l "{{ neo4j_bin_dir }}/neo4j" || true
       args:
         chdir: "{{ neo4j_bin_dir }}"
+        executable: /bin/bash
       register: which_out
+    
+    - debug:
+        var: which_out.stdout
+
 
     - name: Print binary resolution info
       debug:
