@@ -57,36 +57,18 @@
       debug:
         var: which_out.stdout
 
-    - name: Start Neo4j via nohup (explicit from bin dir)
+    - name: Start Neo4j via bin script (explicit from bin dir)
       become: true
       become_user: "{{ neo4j_become_user | default('neo4j') }}"
       become_flags: "-i"
       environment: "{{ neo4j_env }}"
-      shell: |
-        set -e
-        # run in background, keep alive if SSH session closes
-        nohup ./neo4j start > "{{ neo4j_home }}/logs/neo4j-nohup.out" 2>&1 &
-        echo $!   # print the background PID so Ansible captures it
+      command: ./neo4j console
       args:
         chdir: "{{ neo4j_bin_dir }}"
-        executable: /bin/bash
       register: neo4j_start
-      # rc=0 just means the nohup command succeeded (doesn't guarantee DB stays up)
+      # Treat non-zero exit as failure; consider 'already running' a no-op
       failed_when: neo4j_start.rc != 0
-      changed_when: true
-
-    # - name: Start Neo4j via bin script (explicit from bin dir)
-    #   become: true
-    #   become_user: "{{ neo4j_become_user | default('neo4j') }}"
-    #   become_flags: "-i"
-    #   environment: "{{ neo4j_env }}"
-    #   command: ./neo4j start
-    #   args:
-    #     chdir: "{{ neo4j_bin_dir }}"
-    #   register: neo4j_start
-    #   # Treat non-zero exit as failure; consider 'already running' a no-op
-    #   failed_when: neo4j_start.rc != 0
-    #   changed_when: "'already running' not in neo4j_start.stdout | lower"
+      changed_when: "'already running' not in neo4j_start.stdout | lower"
 
     - name: Show start command results (rc/stdout/stderr)
       debug:
