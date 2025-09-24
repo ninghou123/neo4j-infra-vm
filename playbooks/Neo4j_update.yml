@@ -18,12 +18,87 @@
       JAVA_HOME: "{{ java_home }}"
 
   tasks:
-    - name: Start Neo4j (bin) with ./neo4j start
-      when: not (neo4j_use_service | bool)
+    - name: Show which user will run the commands
       become: true
-      become_user: neo4j
+      become_user: "{{ neo4j_become_user | default('neo4j') }}"
+      become_flags: "-i"
+      command: whoami
+      register: whoami_out
+
+    - name: Print user
+      debug:
+        msg: "Running as user: {{ whoami_out.stdout }}"
+
+    - name: Show PATH and which neo4j would be used (sanity check)
+      become: true
+      become_user: "{{ neo4j_become_user | default('neo4j') }}"
       become_flags: "-i"
       environment: "{{ neo4j_env }}"
-      command: neo4j start
+      shell: |
+        set -euo pipefail
+        echo "PWD=$(pwd)"
+        echo "PATH=$PATH"
+        echo "which neo4j:"
+        which neo4j || true
+        echo "resolved:"
+        if which neo4j >/dev/null 2>&1; then readlink -f "$(which neo4j)" || true; fi
+        echo "bin dir listing:"
+        ls -l "{{ neo4j_bin_dir }}/neo4j" || true
       args:
         chdir: "{{ neo4j_bin_dir }}"
+      register: which_out
+
+    - name: Print binary resolution info
+      debug:
+        var: which_out.stdout
+
+    - name: Start Neo4j via bin script (explicit from bin dir)
+      become: true
+      become_user: "{{ neo4j_become_user | default('neo4j') }}"
+      become_flags: "-i"
+      environment: "{{ neo4j_env }}"
+      command: ./neo4j start
+      args:
+        chdir: "{{ neo4j_bin_dir }}"
+      register: neo4j_start
+      # Treat non-zero exit as failure; consider 'already running' a no-op
+      failed_when: neo4j_start.rc != 0
+      changed_when: "'already running' not in neo4j_start.stdout | lower"
+
+    - name: Show start command results (rc/stdout/stderr)
+      debug:
+        msg:
+          - "rc={{ neo4j_start.rc }}"
+          - "stdout={{ neo4j_start.stdout }}"
+          - "stderr={{ neo4j_start.stderr }}"
+          - "cmd={{ neo4j_start.cmd }}"
+          - "cwd={{ neo4j_bin_dir }}"
+
+    - name: Check Neo4j status (does not fail the play)
+      become: true
+      become_user: "{{ neo4j_become_user | default('neo4j') }}"
+      become_flags: "-i"
+      environment: "{{ neo4j_env }}"
+      command: ./neo4j status
+      args:
+        chdir: "{{ neo4j_bin_dir }}"
+      register: neo4j_status
+      failed_when: false
+      changed_when: false
+
+    - name: Print status output
+      debug:
+        var: neo4j_status.stdout
+
+    - name: Tail last 200 lines of neo4j.log (debug only)
+      become: true
+      become_user: "{{ neo4j_become_user | default('neo4j') }}"
+      become_flags: "-i"
+      command: tail -n 200 "{{ neo4j_home }}/logs/neo4j.log"
+      register: neo4j_log
+      failed_when: false
+      changed_when: false
+
+    - name: Print log tail
+      debug:
+        var: neo4j_log.stdout
