@@ -1,96 +1,72 @@
 ---
-- name: Start Neo4j (detached) and wait for readiness
+- name: Start Neo4j via systemd and wait for readiness
   hosts: neo4j
   gather_facts: false
-
-  become: "{{ neo4j_become }}"
-  become_user: "{{ neo4j_become_user }}"
+  become: true
 
   vars_files:
     - "{{ playbook_dir }}/../inventories/vars.yml"
 
   vars:
-    neo4j_env:
-      NEO4J_HOME: "{{ neo4j_home }}"
-      NEO4J_CONF: "{{ neo4j_home }}/conf"
-      PATH: "{{ neo4j_bin_dir }}:/usr/bin:/bin"
-      JAVA_HOME: "{{ java_home }}"
+    # Adjust if your unit is named differently (e.g., neo4j-community)
+    neo4j_service_name: "neo4j"
     bolt_host: "127.0.0.1"
     bolt_port: 7687
-    bolt_timeout_sec: 300
-    neo4j_log_tail_lines: 200
+    wait_timeout_sec: 300
+    journal_lines: 200
 
   tasks:
-    - name: Who am I
+    - name: Show effective user
       ansible.builtin.command: whoami
       register: whoami_out
-      become: true
+    - ansible.builtin.debug:
+        msg: "Running as: {{ whoami_out.stdout }}"
 
-    - name: Print effective user
-      ansible.builtin.debug:
-        msg: "Running as user: {{ whoami_out.stdout }}"
+    - name: Ensure override directory exists
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ neo4j_service_name }}.service.d"
+        state: directory
+        mode: "0755"
 
-    - name: Check current Neo4j status (non-fatal)
-      ansible.builtin.command:
-        cmd: ./neo4j status
-        chdir: "{{ neo4j_bin_dir }}"
-      environment: "{{ neo4j_env }}"
-      become: true
-      become_user: "{{ neo4j_become_user | default('neo4j') }}"
-      register: neo4j_status_before
-      failed_when: false
-      changed_when: false
+    - name: Write systemd override (increase startup timeout, auto-restart)
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ neo4j_service_name }}.service.d/override.conf"
+        mode: "0644"
+        content: |
+          [Service]
+          TimeoutStartSec=300s
+          Restart=on-failure
+          RestartSec=10s
 
-    - name: Print current status
-      ansible.builtin.debug:
-        var: neo4j_status_before.stdout
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
 
-    - name: Start Neo4j detached from SSH/session if not already running
-      ansible.builtin.shell:
-        cmd: |
-          set -e
-          setsid nohup ./neo4j start >/dev/null 2>&1 </dev/null &
-          sleep 1
-        chdir: "{{ neo4j_bin_dir }}"
-        executable: /bin/bash
-      environment: "{{ neo4j_env }}"
-      become: true
-      become_user: "{{ neo4j_become_user | default('neo4j') }}"
-      when: "'running' not in (neo4j_status_before.stdout | lower)"
-      register: neo4j_start_detached
-      changed_when: "'running' not in (neo4j_status_before.stdout | lower)"
+    - name: Enable and start Neo4j
+      ansible.builtin.systemd:
+        name: "{{ neo4j_service_name }}"
+        state: started
+        enabled: true
 
     - name: Wait for Bolt port (Neo4j ready)
       ansible.builtin.wait_for:
         host: "{{ bolt_host }}"
         port: "{{ bolt_port }}"
         delay: 2
-        timeout: "{{ bolt_timeout_sec }}"
-      become: true
+        timeout: "{{ wait_timeout_sec }}"
 
-    - name: Verify Neo4j status after wait
-      ansible.builtin.command:
-        cmd: ./neo4j status
-        chdir: "{{ neo4j_bin_dir }}"
-      environment: "{{ neo4j_env }}"
-      become: true
-      become_user: "{{ neo4j_become_user | default('neo4j') }}"
-      register: neo4j_status_after
+    - name: Show systemd status
+      ansible.builtin.command: "systemctl --no-pager --full status {{ neo4j_service_name }}"
+      register: neo4j_systemd_status
       changed_when: false
-
-    - name: Print final status
-      ansible.builtin.debug:
-        var: neo4j_status_after.stdout
-
-    - name: Tail last lines of neo4j.log (for context)
-      ansible.builtin.command:
-        cmd: tail -n {{ neo4j_log_tail_lines }} "{{ neo4j_home }}/logs/neo4j.log"
-      become: true
-      become_user: "{{ neo4j_become_user | default('neo4j') }}"
-      register: neo4j_log_tail
       failed_when: false
-      changed_when: false
+    - ansible.builtin.debug:
+        var: neo4j_systemd_status.stdout
 
-    - name: Print log tail
-      ansible.builtin.debug:
-        var: neo4j_log_tail.stdout
+    - name: Tail recent Neo4j journal
+      ansible.builtin.command: "journalctl -u {{ neo4j_service_name }} -n {{ journal_lines }} --no-pager"
+      register: neo4j_journal
+      changed_when: false
+      failed_when: false
+    - ansible.builtin.debug:
+        var: neo4j_journal.stdout
