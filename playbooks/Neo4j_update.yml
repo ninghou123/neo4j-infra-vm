@@ -62,7 +62,7 @@
       become_user: "{{ neo4j_become_user | default('neo4j') }}"
       become_flags: "-i"
       environment: "{{ neo4j_env }}"
-      command: ./neo4j start
+      command: ./neo4j start &
       args:
         chdir: "{{ neo4j_bin_dir }}"
       register: neo4j_start
