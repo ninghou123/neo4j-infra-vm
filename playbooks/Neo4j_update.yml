@@ -5,31 +5,28 @@
 
   become: "{{ neo4j_become }}"
   become_user: "{{ neo4j_become_user }}"
-  # Note: intentionally no become_flags: "-i" to avoid login-shell side effects
 
   vars_files:
     - "{{ playbook_dir }}/../inventories/vars.yml"
 
   vars:
-    # Required vars (example)
-    # neo4j_home: /var/lib/neo4j
-    # neo4j_bin_dir: /var/lib/neo4j/bin
-    # java_home: /usr/lib/jvm/java-17-openjdk
     neo4j_env:
       NEO4J_HOME: "{{ neo4j_home }}"
       NEO4J_CONF: "{{ neo4j_home }}/conf"
       PATH: "{{ neo4j_bin_dir }}:/usr/bin:/bin"
       JAVA_HOME: "{{ java_home }}"
+
     bolt_host: "127.0.0.1"
     bolt_port: 7687
     bolt_timeout_sec: 300
     neo4j_log_tail_lines: 200
 
   tasks:
-    - name: Show effective user and basic sanity
+    - name: Who am I
       become: true
       command: whoami
       register: whoami_out
+
     - debug:
         msg: "Running as user: {{ whoami_out.stdout }}"
 
@@ -49,55 +46,3 @@
         var: neo4j_status_before.stdout
 
     - name: Start Neo4j detached from SSH/session if not already running
-      become: true
-      become_user: "{{ neo4j_become_user | default('neo4j') }}"
-      environment: "{{ neo4j_env }}"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-        executable: /bin/bash
-      shell: |
-        set -euo pipefail
-        # Fully detach: new session, ignore HUP, close stdio
-        # Use 'start' (daemon mode) and do not rely on $! since that's the launcher.
-        setsid nohup ./neo4j start >/dev/null 2>&1 < /dev/null &
-        # Give the launcher a brief moment to hand off
-        sleep 1
-      when: "'running' not in (neo4j_status_before.stdout | lower)"
-      register: neo4j_start_detached
-      changed_when: "'running' not in (neo4j_status_before.stdout | lower)"
-
-    - name: Wait for Bolt port (Neo4j ready)
-      become: true
-      wait_for:
-        host: "{{ bolt_host }}"
-        port: "{{ bolt_port }}"
-        delay: 2
-        timeout: "{{ bolt_timeout_sec }}"
-
-    - name: Verify Neo4j status after wait
-      become: true
-      become_user: "{{ neo4j_become_user | default('neo4j') }}"
-      environment: "{{ neo4j_env }}"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-      command: ./neo4j status
-      register: neo4j_status_after
-      changed_when: false
-
-    - name: Print final status
-      debug:
-        var: neo4j_status_after.stdout
-
-    - name: Tail last {{ neo4j_log_tail_lines }} lines of neo4j.log (for context)
-      become: true
-      become_user: "{{ neo4j_become_user | default('neo4j') }}"
-      args:
-        warn: false
-      command: tail -n {{ neo4j_log_tail_lines }} "{{ neo4j_home }}/logs/neo4j.log"
-      register: neo4j_log_tail
-      failed_when: false
-      changed_when: false
-
-    - name: Print log tail
-      debug:
-        var: neo4j_log_tail.stdout
