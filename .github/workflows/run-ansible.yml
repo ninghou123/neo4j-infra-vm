@@ -72,7 +72,7 @@ jobs:
           echo "----- effective line after play -----"
           ssh -i "$GITHUB_WORKSPACE/id_rsa" -o StrictHostKeyChecking=no \
             "${{ secrets.NEO4J_SSH_USER }}@$(awk '/^\[neo4j\]/{flag=1;next}/^\[/{flag=0}flag && NF{print $1; exit}' inventories/dev.ini)" \
-            "grep -E '^\s*dbms\.tx_log\.rotation\.retention_policy' \"\${NEO4J_CONF_PATH:-/opt/neo4j/neo4j-enterprise-4.4.45/conf/neo4j.conf}\" || true"
+            "grep -E '^\s*dbms\.tx_log\.rotation\.retention_policy' \"\${NEO4J_CONF_PATH:-/neo4j/neo4j/neo4j-enterprise-4.4.45/conf/neo4j.conf}\" || true"
     
       - name: Cleanup sensitive files
         if: always()
