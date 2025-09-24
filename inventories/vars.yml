@@ -1,5 +1,5 @@
 # vars.yml
-neo4j_home: "/opt/neo4j/neo4j-enterprise-4.4.45"
+neo4j_home: "/neo4j/neo4j/neo4j-enterprise-4.4.45"
 neo4j_config_file: "{{ neo4j_home }}/conf/neo4j.conf"
 neo4j_bin_dir: "{{ neo4j_home }}/bin"
 neo4j_ctl: "{{ neo4j_bin_dir }}/neo4j"
