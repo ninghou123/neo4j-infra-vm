@@ -88,11 +88,7 @@
       debug:
         msg: "Extracted PID: {{ neo4j_pid | default('N/A') }}"
 
-    # --- NEW: Brief settle so the process can crash if it's going to ---
-    - name: Small delay before process checks
-      wait_for:
-        timeout: 2
-      when: neo4j_pid != ''
+
 
     # --- NEW: Check if the PID is still alive ---
     - name: Check /proc/PID and ps output
