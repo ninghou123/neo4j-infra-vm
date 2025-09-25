@@ -86,7 +86,21 @@
         backup: false
       loop: "{{ (config_parameters | default({})) | dict2items }}"
       register: edit_results
-
+      
+    - name: Build change lines (prefer before -> after if --diff was used)
+      set_fact:
+        change_lines: |-
+          {% if edit_results is defined %}
+          {% for r in edit_results.results if r.changed %}
+          {% if r.diff is defined and (r.diff.before is defined or r.diff.after is defined) %}
+          {{ r.item.key }}: {{ r.diff.before | default('N/A') }} -> {{ r.diff.after | default(r.item.value) }}
+          {% else %}
+          {{ r.item.key }} = {{ r.item.value }}
+          {% endif %}
+          {% endfor %}
+          {% endif %}
+      changed_when: false
+      
     - name: Compute whether any parameter changed
       set_fact:
         changed_any: "{{ (edit_results.results | selectattr('changed') | list | length) > 0 }}"
@@ -157,30 +171,28 @@
           conf: {{ neo4j_config_file }}
           ctl: {{ neo4j_ctl }}
           wait target: {{ neo4j_wait_host | default(inventory_hostname) }}:{{ neo4j_wait_port }}
-
+    
           changed params: {{
             (edit_results.results | selectattr('changed') | map(attribute='item.key') | list) | join(', ')
             if edit_results is defined else 'n/a'
           }}
-
+    
           ---- neo4j.conf changes ----
-          {% if change_details is defined and change_details|trim %}
-          {{ change_details }}
-          {% if change_summary is defined and change_summary|trim %}
-          {{ change_summary }}
+          {% if change_lines is defined and change_lines|trim %}
+          {{ change_lines }}
           {% else %}
           (no changes detected)
           {% endif %}
-
+    
           ---- status BEFORE ----
           {{ status_before.stdout | default('') }}
-
+    
           ---- status AFTER ----
           {{ status_after.stdout | default('') }}
-
+    
           ---- tail neo4j.log ----
           {{ tail_neo4j_log.stdout | default('') }}
-
+    
           ---- tail debug.log ----
           {{ tail_debug_log.stdout | default('') }}
       changed_when: false
