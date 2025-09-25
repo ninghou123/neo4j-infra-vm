@@ -1,4 +1,4 @@
-- name: Update Neo4j config on this VM and restart (with safeguards + report)
+- name: Update Neo4j config on this VM and restart (with safeguards + report)---succeed version 09252025
   hosts: neo4j
   serial: 1
   any_errors_fatal: true
@@ -77,18 +77,6 @@
         dest: "{{ neo4j_config_file }}{{ backup_suffix | default('.pre_ansible_' + lookup('pipe','date +%Y%m%d%H%M%S')) }}"
         remote_src: true
 
-    # ===== NEW: capture BEFORE values for all managed keys =====
-    - name: Define managed items (keys/values we enforce)
-      set_fact:
-        managed_items: "{{ (config_parameters | default({})) | dict2items }}"
-      changed_when: false
-
-    - name: Capture BEFORE values for managed params
-      set_fact:
-        before_values: "{{ (before_values | default({})) | combine({ item.key: lookup('ini', item.key, file=neo4j_config_file, type='properties', default='__ABSENT__') }) }}"
-      loop: "{{ managed_items }}"
-      changed_when: false
-
     - name: Ensure desired parameters are present/updated (idempotent)
       ansible.builtin.ini_file:
         path: "{{ neo4j_config_file }}"
@@ -96,43 +84,8 @@
         value: "{{ item.value }}"
         no_extra_spaces: true
         backup: false
-      loop: "{{ managed_items }}"
+      loop: "{{ (config_parameters | default({})) | dict2items }}"
       register: edit_results
-
-    # ===== NEW: capture AFTER values and compute pretty diff =====
-    - name: Capture AFTER values for managed params
-      set_fact:
-        after_values: "{{ (after_values | default({})) | combine({ item.key: lookup('ini', item.key, file=neo4j_config_file, type='properties', default='__ABSENT__') }) }}"
-      loop: "{{ managed_items }}"
-      changed_when: false
-
-    - name: Build list of changed keys
-      set_fact:
-        changed_keys: >-
-          {{
-            managed_items
-            | map(attribute='key')
-            | select('reject', 'equalto', None)
-            | select('match', '.*')  # no-op safety
-            | select('select', 'x', before_values, after_values)  # ignored; Jinja quirk
-          }}
-      changed_when: false
-
-    # Create a neat "key: before -> after" list for the report
-    - name: Assemble pretty diff lines (only keys that changed)
-      set_fact:
-        pretty_diff: "{{ (pretty_diff | default([])) + [ item ~ ': ' ~ (before_values[item] | default('__ABSENT__')) ~ ' -> ' ~ (after_values[item] | default('__ABSENT__')) ] }}"
-      when: (before_values[item] | default('__ABSENT__')) != (after_values[item] | default('__ABSENT__'))
-      loop: "{{ managed_items | map(attribute='key') | list }}"
-      changed_when: false
-
-    # Optional: machine-readable dict of changes
-    - name: Build machine-readable changes dict
-      set_fact:
-        changes_dict: "{{ (changes_dict | default({})) | combine({ item: {'before': (before_values[item]|default('__ABSENT__')), 'after': (after_values[item]|default('__ABSENT__')) }}) }}"
-      when: (before_values[item] | default('__ABSENT__')) != (after_values[item] | default('__ABSENT__'))
-      loop: "{{ managed_items | map(attribute='key') | list }}"
-      changed_when: false
 
     - name: Compute whether any parameter changed
       set_fact:
@@ -171,6 +124,16 @@
       failed_when: false
       changed_when: false
 
+    - name: Build detailed change summary from edit_results
+      set_fact:
+        change_details: |-
+          {% for r in edit_results.results if r.changed %}
+          {{ r.item.key }}: {{ r.diff.before | default('N/A') }} -> {{ r.diff.after | default(r.item.value) }}
+          {% endfor %}
+      when: edit_results is defined
+      changed_when: false
+
+
     - name: Build run report | Set timestamp
       set_fact:
         run_ts: "{{ lookup('pipe','date +%Y%m%d%H%M%S') }}"
@@ -191,12 +154,12 @@
             if edit_results is defined else 'n/a'
           }}
 
-          ---- neo4j.conf changes (before -> after) ----
-          {% if pretty_diff is defined and pretty_diff|length > 0 -%}
-          {{ pretty_diff | join('\n') }}
-          {%- else -%}
+          ---- neo4j.conf changes ----
+          {% if change_details is defined and change_details|trim %}
+          {{ change_details }}
+          {% else %}
           (no changes detected)
-          {%- endif %}
+          {% endif %}
 
           ---- status BEFORE ----
           {{ status_before.stdout | default('') }}
@@ -210,14 +173,14 @@
           ---- tail debug.log ----
           {{ tail_debug_log.stdout | default('') }}
       changed_when: false
-
+      
     - name: Write run report to file on target
       copy:
         content: "{{ run_report }}"
         dest: "{{ neo4j_home }}/ansible_run_{{ run_ts }}.log"
         owner: neo4j
         mode: '0644'
-
+        
   handlers:
     # -------- BIN MODE (tarball script) --------
     - name: Stop Neo4j (bin)
@@ -276,6 +239,7 @@
         chdir: "{{ neo4j_bin_dir }}"
         executable: /bin/bash
       register: neo4j_start
+      # rc=0 just means the nohup command succeeded (doesn't guarantee DB stays up)
       failed_when: neo4j_start.rc != 0
       changed_when: true
 
@@ -288,6 +252,7 @@
           - "cmd={{ neo4j_start.cmd }}"
           - "cwd={{ neo4j_bin_dir }}"
 
+    # --- NEW: Extract PID from "Started ... (pid:NNNN)" ---
     - name: Extract started PID
       set_fact:
         neo4j_pid: "{{ (neo4j_start.stdout | regex_search('pid:(\\d+)', '\\1')) | default('') }}"
@@ -296,6 +261,9 @@
       debug:
         msg: "Extracted PID: {{ neo4j_pid | default('N/A') }}"
 
+
+
+    # --- NEW: Check if the PID is still alive ---
     - name: Check /proc/PID and ps output
       shell: |
         set -e
@@ -319,7 +287,6 @@
     - name: Print process check output
       debug:
         var: ps_check.stdout
-
     - name: Check Neo4j status (does not fail the play)
       become: true
       become_user: "{{ neo4j_become_user | default('neo4j') }}"
@@ -357,6 +324,8 @@
         state: started
         timeout: 100
       changed_when: false
+
+
 
     # -------- SERVICE MODE (systemd) --------
     - name: Restart service
