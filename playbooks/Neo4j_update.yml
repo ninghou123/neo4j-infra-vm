@@ -87,33 +87,14 @@
       loop: "{{ (config_parameters | default({})) | dict2items }}"
       register: edit_results
       
-    - name: Build change lines (prefer before -> after if --diff was used)
-      set_fact:
-        change_lines: |-
-          {% if edit_results is defined %}
-          {% for r in edit_results.results if r.changed %}
-          {% if r.diff is defined and (r.diff.before is defined or r.diff.after is defined) %}
-          {{ r.item.key }}: {{ r.diff.before | default('N/A') }} -> {{ r.diff.after | default(r.item.value) }}
-          {% else %}
-          {{ r.item.key }} = {{ r.item.value }}
-          {% endif %}
-          {% endfor %}
-          {% endif %}
-      changed_when: false
+
       
     - name: Compute whether any parameter changed
       set_fact:
         changed_any: "{{ (edit_results.results | selectattr('changed') | list | length) > 0 }}"
       changed_when: false
 
-    - name: Build change summary with values
-      set_fact:
-      change_summary: |-
-        {% for r in edit_results.results if r.changed %}
-        {{ r.item.key }} = {{ r.item.value }}
-        {% endfor %}
-      when: edit_results is defined
-      changed_when: false
+
 
     - name: Trigger restart if config changed
       when: changed_any | bool
@@ -147,13 +128,18 @@
       failed_when: false
       changed_when: false
 
-    - name: Build detailed change summary from edit_results
+    - name: Build change lines (prefer before -> after if --diff was used)
       set_fact:
-        change_details: |-
+        change_lines: |-
+          {% if edit_results is defined %}
           {% for r in edit_results.results if r.changed %}
+          {% if r.diff is defined and (r.diff.before is defined or r.diff.after is defined) %}
           {{ r.item.key }}: {{ r.diff.before | default('N/A') }} -> {{ r.diff.after | default(r.item.value) }}
+          {% else %}
+          {{ r.item.key }} = {{ r.item.value }}
+          {% endif %}
           {% endfor %}
-      when: edit_results is defined
+          {% endif %}
       changed_when: false
 
 
