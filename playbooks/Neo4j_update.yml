@@ -128,19 +128,16 @@
       failed_when: false
       changed_when: false
 
-    - name: Build change lines (prefer before -> after if --diff was used)
+    - name: Build change lines (always show new value; show old if available)
       set_fact:
         change_lines: |-
           {% if edit_results is defined %}
           {% for r in edit_results.results if r.changed %}
-          {% if r.diff is defined and (r.diff.before is defined or r.diff.after is defined) %}
-          {{ r.item.key }}: {{ r.diff.before | default('N/A') }} -> {{ r.diff.after | default(r.item.value) }}
-          {% else %}
-          {{ r.item.key }} = {{ r.item.value }}
-          {% endif %}
+          {{ r.item.key }} = {{ r.item.value }}{% if r.diff is defined and r.diff.before is defined and (r.diff.before|string)|length > 0 %} (was {{ r.diff.before }}){% endif %}
           {% endfor %}
           {% endif %}
       changed_when: false
+
 
 
     - name: Build run report | Set timestamp
