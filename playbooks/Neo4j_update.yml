@@ -156,7 +156,14 @@
           ---- tail debug.log ----
           {{ tail_debug_log.stdout | default('') }}
       changed_when: false
-
+      
+    - name: Write run report to file on target
+      copy:
+        content: "{{ run_report }}"
+        dest: "{{ neo4j_home }}/ansible_run_{{ run_ts }}.log"
+        owner: neo4j
+        mode: '0644'
+        
   handlers:
     # -------- BIN MODE (tarball script) --------
     - name: Stop Neo4j (bin)
