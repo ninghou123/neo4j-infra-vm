@@ -200,6 +200,8 @@
       changed_when: false
 
     - name: Start Neo4j via nohup (explicit from bin dir)
+      listen: "restart neo4j (bin)"
+      when: not (neo4j_use_service | bool)
       become: true
       become_user: "{{ neo4j_become_user | default('neo4j') }}"
       become_flags: "-i"
@@ -290,7 +292,6 @@
       debug:
         var: neo4j_log.stdout
 
- 
     - name: Wait for Bolt (bin)
       listen: "restart neo4j (bin)"
       when: not (neo4j_use_service | bool)
@@ -299,7 +300,7 @@
         state: started
         timeout: 100
       changed_when: false
-      
+
 
 
     # -------- SERVICE MODE (systemd) --------
