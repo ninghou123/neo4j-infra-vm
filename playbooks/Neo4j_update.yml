@@ -217,44 +217,26 @@
       failed_when: neo4j_start.rc != 0
       changed_when: true
 
-
-    - name: Show start output (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
+    - name: Show start command results (rc/stdout/stderr)
       debug:
-        msg: |
-          --- START rc={{ start_trace.rc | default('n/a') }} ---
-          STDOUT:
-          {{ start_trace.stdout | default('') }}
-          STDERR:
-          {{ start_trace.stderr | default('') }}
+        msg:
+          - "rc={{ neo4j_start.rc }}"
+          - "stdout={{ neo4j_start.stdout }}"
+          - "stderr={{ neo4j_start.stderr }}"
+          - "cmd={{ neo4j_start.cmd }}"
+          - "cwd={{ neo4j_bin_dir }}"
 
-    - name: Wait until running (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
-      become: true
-      become_user: neo4j
-      become_flags: "-i"
-      environment: "{{ neo4j_env }}"
-      command: "{{ neo4j_ctl }} status"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-      register: status_check
-      retries: 60
-      delay: 5
-      until: status_check.rc == 0
-      failed_when: false
-      changed_when: false
+    # --- NEW: Extract PID from "Started ... (pid:NNNN)" ---
+    - name: Extract started PID
+      set_fact:
+        neo4j_pid: "{{ (neo4j_start.stdout | regex_search('pid:(\\d+)', '\\1')) | default('') }}"
 
-    - name: Wait for Bolt (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
-      wait_for:
-        port: "{{ neo4j_wait_port }}"
-        state: started
-        timeout: 100
-      changed_when: false
-      
+    - name: Print extracted PID (if any)
+      debug:
+        msg: "Extracted PID: {{ neo4j_pid | default('N/A') }}"
+
+
+
     # --- NEW: Check if the PID is still alive ---
     - name: Check /proc/PID and ps output
       shell: |
@@ -295,25 +277,30 @@
       debug:
         var: neo4j_status.stdout
 
-    - name: Tail logs after start (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
-      shell: |
-        set -euo pipefail
-        tail -n 120 "{{ neo4j_home }}/logs/neo4j.log" || true
-      args:
-        executable: /bin/bash
-      register: tail_after_start
-      changed_when: false
+    - name: Tail last 200 lines of neo4j.log (debug only)
+      become: true
+      become_user: "{{ neo4j_become_user | default('neo4j') }}"
+      become_flags: "-i"
+      command: tail -n 200 "{{ neo4j_home }}/logs/neo4j.log"
+      register: neo4j_log
       failed_when: false
+      changed_when: false
 
-    - name: Show log tail (bin)
+    - name: Print log tail
+      debug:
+        var: neo4j_log.stdout
+
+ 
+    - name: Wait for Bolt (bin)
       listen: "restart neo4j (bin)"
       when: not (neo4j_use_service | bool)
-      debug:
-        msg: |
-          --- neo4j.log (after start) ---
-          {{ tail_after_start.stdout | default('') }}
+      wait_for:
+        port: "{{ neo4j_wait_port }}"
+        state: started
+        timeout: 100
+      changed_when: false
+      
+
 
     # -------- SERVICE MODE (systemd) --------
     - name: Restart service
