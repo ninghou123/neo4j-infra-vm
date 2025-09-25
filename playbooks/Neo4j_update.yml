@@ -92,6 +92,15 @@
         changed_any: "{{ (edit_results.results | selectattr('changed') | list | length) > 0 }}"
       changed_when: false
 
+    - name: Build change summary with values
+      set_fact:
+      change_summary: |-
+        {% for r in edit_results.results if r.changed %}
+        {{ r.item.key }} = {{ r.item.value }}
+        {% endfor %}
+      when: edit_results is defined
+      changed_when: false
+
     - name: Trigger restart if config changed
       when: changed_any | bool
       debug:
@@ -157,6 +166,8 @@
           ---- neo4j.conf changes ----
           {% if change_details is defined and change_details|trim %}
           {{ change_details }}
+          {% if change_summary is defined and change_summary|trim %}
+          {{ change_summary }}
           {% else %}
           (no changes detected)
           {% endif %}
