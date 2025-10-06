@@ -1,12 +1,15 @@
 # vars.yml
 neo4j_user: "neo4j"
 neo4j_home: "/neo4j/neo4j/neo4j-enterprise-4.4.45"
-conf_dir: "{{ neo4j_home }}/conf/neo4j.conf"
+
+# Correct: conf_dir points to the directory, not the file
+conf_dir: "{{ neo4j_home }}/conf"
 conf_file: "neo4j.conf"
 conf_path: "{{ conf_dir }}/{{ conf_file }}"
+
 neo4j_bin_dir: "{{ neo4j_home }}/bin"
 neo4j_ctl: "{{ neo4j_bin_dir }}/neo4j"
-neo4j_user: neo4j
+
 neo4j_become: true
 neo4j_become_user: neo4j
 
@@ -15,11 +18,10 @@ neo4j_wait_host: "{{ hostvars[inventory_hostname].ansible_host | default(invento
 neo4j_wait_port: 7687
 java_home: "/usr/lib/jvm/java-11-openjdk-amd64"
 
-# <<< put YOUR real edits here >>>
+# Desired edits live in one place (here)
 desired_params:
-      - { key: "dbms.track_query_cpu_time",    value: "false" }
-      - { key: "dbms.track_query_memory_time", value: "false" }
+  - { key: "dbms.track_query_cpu_time",    value: "false" }
+  - { key: "dbms.track_query_memory_time", value: "false" }
 
-backup_suffix: ".pre_ansible_{{ lookup('pipe','date +%Y%m%d%H%M%S') }}"
 neo4j_use_service: false
 neo4j_service_name: neo4j
