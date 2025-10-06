@@ -21,7 +21,7 @@ java_home: "/usr/lib/jvm/java-11-openjdk-amd64"
 # Desired edits live in one place (here)
 desired_params:
   - { key: "dbms.track_query_cpu_time",    value: "false" }
-  - { key: "dbms.track_query_memory_time", value: "false" }
+  - { key: "dbms.track_query_memory_time", value: "true" }
 
 neo4j_use_service: false
 neo4j_service_name: neo4j
