@@ -1,365 +1,212 @@
-- name: Update Neo4j config on this VM and restart (with safeguards + report)---succeed version 09252025
+---
+- name: Edit neo4j.conf with ONE conditional backup, then conditional restart (built-ins only)
   hosts: neo4j
+  gather_facts: false
   serial: 1
   any_errors_fatal: true
-  gather_facts: false
-
+  
   become: "{{ neo4j_become }}"
   become_user: "{{ neo4j_become_user }}"
   become_flags: "-i"
 
+
   vars_files:
     - "{{ playbook_dir }}/../inventories/vars.yml"
 
-  # Environment for tarball/bin installs; override JAVA_HOME via vars.yml (java_home) if needed
   vars:
     neo4j_env:
-      NEO4J_HOME: "{{ neo4j_home }}"
-      NEO4J_CONF: "{{ neo4j_home }}/conf"
-      PATH: "{{ neo4j_bin_dir }}:/usr/bin:/bin"
+      neo4j_home: "{{ neo4j_home }}"
+      conf_dir: "{{ neo4j_home }}/conf"
+      conf_file: "neo4j.conf"
+      neo4j_ctl: "{{ neo4j_home }}/bin/neo4j"
+      conf_path: "{{ conf_dir }}/{{ conf_file }}"
       JAVA_HOME: "{{ java_home }}"
 
-  pre_tasks:
-    - name: Precheck | Confirm neo4j.conf exists
-      stat:
-        path: "{{ neo4j_config_file }}"
-      register: cfg
+    desired_params:
+      - { key: "dbms.track_query_cpu_time",    value: "false" }
+      - { key: "dbms.track_query_memory_time", value: "false" }
 
-    - name: Precheck | Confirm neo4j CLI exists
-      stat:
-        path: "{{ neo4j_ctl }}"
-      register: cli
-
-    - name: Who am I (effective)?
-      become: true
-      become_user: "{{ neo4j_become_user }}"
-      become_flags: "-i"
-      command: bash -lc 'echo whoami=$(whoami); id; echo HOME=$HOME USER=$USER'
-      register: whoami_out
-      changed_when: false
-
-    - name: Show effective user
-      debug:
-        var: whoami_out.stdout_lines
-
-    - name: Precheck | Fail early if files missing
-      fail:
-        msg: >-
-          Missing required file(s):
-          {% if not cfg.stat.exists %}neo4j.conf {% endif %}
-          {% if not cli.stat.exists %}neo4j CLI{% endif %}.
-          Check neo4j_home/neo4j_config_file/neo4j_ctl.
-      when: not cfg.stat.exists or not cli.stat.exists
-
-    - name: Precheck | Config is writable by run-as user
-      command: test -w "{{ neo4j_config_file }}"
-      register: writable_check
-      changed_when: false
-
-    - name: Precheck | Fail if config is not writable
-      fail:
-        msg: "neo4j.conf is not writable by {{ neo4j_user | default('neo4j') }}: {{ neo4j_config_file }}"
-      when: writable_check.rc != 0
-
-    - name: Capture status BEFORE
-      environment: "{{ neo4j_env }}"
-      command: "{{ neo4j_ctl }} status"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-      register: status_before
-      failed_when: false
-      changed_when: false
+    # Polling tunables
+    stop_retries: 30     # ~30s if delay=1
+    stop_delay: 1
+    start_retries: 120   # ~120s if delay=1
+    start_delay: 1
 
   tasks:
-    - name: Backup current config (timestamped)
-      copy:
-        src: "{{ neo4j_config_file }}"
-        dest: "{{ neo4j_config_file }}{{ backup_suffix | default('.pre_ansible_' + lookup('pipe','date +%Y%m%d%H%M%S')) }}"
-        remote_src: true
+    # ---------- Prechecks & capture original ----------
+    - name: Ensure neo4j.conf exists
+      ansible.builtin.stat:
+        path: "{{ conf_path }}"
+      register: conf_stat
 
-    - name: Ensure desired parameters are present/updated (idempotent)
-      ansible.builtin.ini_file:
-        path: "{{ neo4j_config_file }}"
-        option: "{{ item.key }}"
-        value: "{{ item.value }}"
-        no_extra_spaces: true
+    - name: Fail if neo4j.conf is missing
+      ansible.builtin.fail:
+        msg: "neo4j.conf is missing: {{ conf_path }}"
+      when: not conf_stat.stat.exists
+
+    - name: Check write permission as {{ neo4j_user }}
+      ansible.builtin.command:
+        cmd: "test -w {{ conf_path }}"
+      register: writable_check
+      changed_when: false
+      failed_when: writable_check.rc != 0
+
+    - name: Capture status BEFORE (rc==0 means running for neo4j CLI)
+      ansible.builtin.command:
+        cmd: "{{ neo4j_ctl }} status"
+      register: status_before
+      changed_when: false
+      failed_when: false
+
+    - name: Compute 'was_running' flag
+      ansible.builtin.set_fact:
+        was_running: "{{ status_before.rc == 0 }}"
+      changed_when: false
+
+    - name: Slurp original neo4j.conf (for single post-change backup)
+      ansible.builtin.slurp:
+        path: "{{ conf_path }}"
+      register: conf_slurp
+
+    - name: Remember original checksum and a high-res timestamp
+      ansible.builtin.set_fact:
+        orig_checksum: "{{ conf_stat.stat.checksum | default('') }}"
+        ts: "{{ lookup('pipe','date +%Y%m%d%H%M%S%N') }}"
+      changed_when: false
+
+    # ---------- De-duplicate, then ensure canonical lines ----------
+    - name: Remove any existing lines for each key (commented or not)
+      ansible.builtin.replace:
+        path: "{{ conf_path }}"
+        regexp: "^[ \\t]*#?[ \\t]*{{ item.key | regex_escape }}[ \\t]*=.*$"
+        replace: ""
+      loop: "{{ desired_params }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: dedupe_result
+
+    - name: Ensure canonical key=value lines exist (append if missing)
+      ansible.builtin.lineinfile:
+        path: "{{ conf_path }}"
+        regexp: "^[ \\t]*#?[ \\t]*{{ item.key | regex_escape }}[ \\t]*=.*$"
+        line: "{{ item.key }}={{ item.value }}"
+        insertafter: EOF
+        state: present
+        create: yes
+        backrefs: no
         backup: false
-      loop: "{{ (config_parameters | default({})) | dict2items }}"
-      register: edit_results
-      
+      loop: "{{ desired_params }}"
+      loop_control:
+        label: "{{ item.key }}={{ item.value }}"
+      register: ensure_result
 
-      
-    - name: Compute whether any parameter changed
-      set_fact:
-        changed_any: "{{ (edit_results.results | selectattr('changed') | list | length) > 0 }}"
+    # ---------- Detect whether the file changed ----------
+    - name: Stat neo4j.conf after edits
+      ansible.builtin.stat:
+        path: "{{ conf_path }}"
+      register: conf_after
+
+    - name: Decide if content changed
+      ansible.builtin.set_fact:
+        file_changed: "{{ (orig_checksum | length > 0) and (conf_after.stat.checksum | default('') != orig_checksum) }}"
       changed_when: false
 
+    # ---------- Single backup only if a change occurred ----------
+    - name: Write single timestamped backup with original content (only if changed)
+      ansible.builtin.copy:
+        dest: "{{ conf_path }}.{{ ts }}"
+        content: "{{ conf_slurp.content | b64decode }}"
+      when: file_changed
+      register: backup_copy
 
+    # ---------- Validation of desired lines ----------
+    - name: Read final file content
+      ansible.builtin.slurp:
+        path: "{{ conf_path }}"
+      register: final_slurp
 
-    - name: Trigger restart if config changed
-      when: changed_any | bool
-      debug:
-        msg: "Config changed → restarting Neo4j"
-      changed_when: true
-      notify:
-        - restart neo4j (bin)
-        - restart neo4j (svc)
+    - name: Validate resulting lines exist (pure built-ins)
+      ansible.builtin.assert:
+        that:
+          - (final_slurp.content | b64decode) is regex("(?m)^[ \\t]*{{ item.key | regex_escape }}[ \\t]*=[ \\t]*{{ item.value }}(?:[ \\t]*#.*)?[ \\t]*$")
+        fail_msg: "Missing or mismatched: {{ item.key }}={{ item.value }}"
+      loop: "{{ desired_params }}"
+      loop_control:
+        label: "{{ item.key }}={{ item.value }}"
 
-    - meta: flush_handlers
-
-    - name: Capture status AFTER
-      environment: "{{ neo4j_env }}"
-      command: "{{ neo4j_ctl }} status"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-      register: status_after
-      failed_when: false
-      changed_when: false
-
-    - name: Tail last logs (neo4j.log)
-      command: "tail -n 80 {{ neo4j_home }}/logs/neo4j.log"
-      register: tail_neo4j_log
-      failed_when: false
-      changed_when: false
-
-    - name: Tail last logs (debug.log)
-      command: "tail -n 80 {{ neo4j_home }}/logs/debug.log"
-      register: tail_debug_log
-      failed_when: false
-      changed_when: false
-
-    - name: Build change lines (always show new value; show old if available)
-      set_fact:
-        change_lines: |-
-          {% if edit_results is defined %}
-          {% for r in edit_results.results if r.changed %}
-          {{ r.item.key }} = {{ r.item.value }}{% if r.diff is defined and r.diff.before is defined and (r.diff.before|string)|length > 0 %} (was {{ r.diff.before }}){% endif %}
-          {% endfor %}
-          {% endif %}
-      changed_when: false
-
-
-
-    - name: Build run report | Set timestamp
-      set_fact:
-        run_ts: "{{ lookup('pipe','date +%Y%m%d%H%M%S') }}"
-      changed_when: false
-
-    - name: Build run report | Assemble content
-      set_fact:
-        run_report: |-
-          Neo4j Ansible run on {{ inventory_hostname }} @ {{ run_ts }}
-          run_as_user: {{ neo4j_user | default('neo4j') }}
-          neo4j_home: {{ neo4j_home }}
-          conf: {{ neo4j_config_file }}
-          ctl: {{ neo4j_ctl }}
-          wait target: {{ neo4j_wait_host | default(inventory_hostname) }}:{{ neo4j_wait_port }}
-    
-          changed params: {{
-            (edit_results.results | selectattr('changed') | map(attribute='item.key') | list) | join(', ')
-            if edit_results is defined else 'n/a'
-          }}
-    
-          ---- neo4j.conf changes ----
-          {% if change_lines is defined and change_lines|trim %}
-          {{ change_lines }}
-          {% else %}
-          (no changes detected)
-          {% endif %}
-    
-          ---- status BEFORE ----
-          {{ status_before.stdout | default('') }}
-    
-          ---- status AFTER ----
-          {{ status_after.stdout | default('') }}
-    
-          ---- tail neo4j.log ----
-          {{ tail_neo4j_log.stdout | default('') }}
-    
-          ---- tail debug.log ----
-          {{ tail_debug_log.stdout | default('') }}
-      changed_when: false
-      
-    - name: Write run report to file on target
-      copy:
-        content: "{{ run_report }}"
-        dest: "{{ neo4j_home }}/ansible_run_{{ run_ts }}.log"
-        owner: neo4j
-        mode: '0644'
-        
-  handlers:
-    # -------- BIN MODE (tarball script) --------
-    - name: Stop Neo4j (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
-      become: true
-      become_user: neo4j
-      become_flags: "-i"
-      environment: "{{ neo4j_env }}"
-      command: "{{ neo4j_ctl }} stop"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
+    # ---------- CONDITIONAL restart flow (only if it was running AND file changed) ----------
+    - name: Stop Neo4j (only if running and config changed)
+      ansible.builtin.command:
+        cmd: "{{ neo4j_ctl }} stop"
       register: stop_out
-      failed_when: false
-      changed_when: stop_out.rc == 0
-
-    - name: Wait until stopped (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
-      become: true
-      become_user: neo4j
-      become_flags: "-i"
-      environment: "{{ neo4j_env }}"
-      command: "{{ neo4j_ctl }} status"
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-      register: status_stopped
-      retries: 60
-      delay: 5
-      until: status_stopped.rc != 0
-      failed_when: false
-      changed_when: false
-
-    - name: Wait for Bolt to stop (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
-      wait_for:
-        port: "{{ neo4j_wait_port }}"
-        state: stopped
-        timeout: 600
-      changed_when: false
-
-    - name: Start Neo4j via nohup (explicit from bin dir)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
-      become: true
-      become_user: "{{ neo4j_become_user | default('neo4j') }}"
-      become_flags: "-i"
-      environment: "{{ neo4j_env }}"
-      shell: |
-        set -e
-        # run in background, keep alive if SSH session closes
-        nohup ./neo4j start > "{{ neo4j_home }}/logs/neo4j-nohup.out" 2>&1 &
-        echo $!   # print the background PID so Ansible captures it
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-        executable: /bin/bash
-      register: neo4j_start
-      # rc=0 just means the nohup command succeeded (doesn't guarantee DB stays up)
-      failed_when: neo4j_start.rc != 0
+      when:
+        - file_changed
+        - was_running
       changed_when: true
+      failed_when: false
 
-    - name: Show start command results (rc/stdout/stderr)
-      debug:
-        msg:
-          - "rc={{ neo4j_start.rc }}"
-          - "stdout={{ neo4j_start.stdout }}"
-          - "stderr={{ neo4j_start.stderr }}"
-          - "cmd={{ neo4j_start.cmd }}"
-          - "cwd={{ neo4j_bin_dir }}"
+    - name: Wait until Neo4j is stopped
+      ansible.builtin.command:
+        cmd: "{{ neo4j_ctl }} status"
+      register: stop_wait
+      changed_when: false
+      failed_when: false
+      until: stop_wait.rc != 0
+      retries: "{{ stop_retries }}"
+      delay: "{{ stop_delay }}"
+      when:
+        - file_changed
+        - was_running
 
-    # --- NEW: Extract PID from "Started ... (pid:NNNN)" ---
-    - name: Extract started PID
-      set_fact:
-        neo4j_pid: "{{ (neo4j_start.stdout | regex_search('pid:(\\d+)', '\\1')) | default('') }}"
-
-    - name: Print extracted PID (if any)
-      debug:
-        msg: "Extracted PID: {{ neo4j_pid | default('N/A') }}"
-
-
-
-    # --- NEW: Check if the PID is still alive ---
-    - name: Check /proc/PID and ps output
-      shell: |
-        set -e
-        PID="{{ neo4j_pid }}"
-        if [ -n "$PID" ] && [ -d "/proc/$PID" ]; then
-          echo "PROC_EXISTS=1"
-          echo "CMDLINE=$(tr '\0' ' ' </proc/$PID/cmdline || true)"
-        else
-          echo "PROC_EXISTS=0"
-        fi
-        echo "--- ps -ef | grep -i neo4j (sanitized) ---"
-        ps -ef | grep -i neo4j | grep -v grep || true
-        echo "--- jps -lv (if available) ---"
-        if command -v jps >/dev/null 2>&1; then jps -lv || true; fi
+    - name: Start Neo4j in nohup (background)
+      ansible.builtin.shell: |
+        nohup "{{ neo4j_ctl }}" start >/dev/null 2>&1 &
       args:
         executable: /bin/bash
-      register: ps_check
+      register: start_nohup
+      changed_when: true
+      when:
+        - file_changed
+        - was_running
+
+    - name: Wait until Neo4j is running
+      ansible.builtin.command:
+        cmd: "{{ neo4j_ctl }} status"
+      register: start_wait
+      changed_when: false
+      failed_when: false
+      until: start_wait.rc == 0
+      retries: "{{ start_retries }}"
+      delay: "{{ start_delay }}"
+      when:
+        - file_changed
+        - was_running
+
+    - name: Capture status AFTER (final)
+      ansible.builtin.command:
+        cmd: "{{ neo4j_ctl }} status"
+      register: status_after
       changed_when: false
       failed_when: false
 
-    - name: Print process check output
-      debug:
-        var: ps_check.stdout
-    - name: Check Neo4j status (does not fail the play)
-      become: true
-      become_user: "{{ neo4j_become_user | default('neo4j') }}"
-      become_flags: "-i"
-      environment: "{{ neo4j_env }}"
-      command: ./neo4j status
-      args:
-        chdir: "{{ neo4j_bin_dir }}"
-      register: neo4j_status
-      failed_when: false
-      changed_when: false
-
-    - name: Print status output
-      debug:
-        var: neo4j_status.stdout
-
-    - name: Tail last 200 lines of neo4j.log (debug only)
-      become: true
-      become_user: "{{ neo4j_become_user | default('neo4j') }}"
-      become_flags: "-i"
-      command: tail -n 200 "{{ neo4j_home }}/logs/neo4j.log"
-      register: neo4j_log
-      failed_when: false
-      changed_when: false
-
-    - name: Print log tail
-      debug:
-        var: neo4j_log.stdout
-
-    - name: Wait for Bolt (bin)
-      listen: "restart neo4j (bin)"
-      when: not (neo4j_use_service | bool)
-      wait_for:
-        port: "{{ neo4j_wait_port }}"
-        state: started
-        timeout: 100
-      changed_when: false
-
-
-
-    # -------- SERVICE MODE (systemd) --------
-    - name: Restart service
-      listen: "restart neo4j (svc)"
-      when: (neo4j_use_service | bool)
-      become: true
-      become_user: root
-      service:
-        name: "{{ neo4j_service_name | default('neo4j') }}"
-        state: restarted
-
-    - name: Wait until running (svc)
-      listen: "restart neo4j (svc)"
-      when: (neo4j_use_service | bool)
-      become: true
-      become_user: root
-      command: systemctl is-active "{{ neo4j_service_name | default('neo4j') }}"
-      register: svc_active
-      retries: 60
-      delay: 5
-      until: svc_active.stdout.strip() == "active"
-      changed_when: false
-
-    - name: Wait for Bolt (svc)
-      listen: "restart neo4j (svc)"
-      when: (neo4j_use_service | bool)
-      wait_for:
-        port: "{{ neo4j_wait_port }}"
-        state: started
-        timeout: 100
-      changed_when: false
+    # ---------- Summary ----------
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "Config changed: {{ file_changed }}"
+          - "Neo4j was running before: {{ was_running }}"
+          - >-
+            Backup: {{
+              (file_changed | bool)
+              | ternary(conf_path ~ '.' ~ ts, 'no backup (file unchanged)')
+            }}
+          - >-
+            Stop issued: {{
+              (file_changed and was_running) | ternary('yes', 'no')
+            }}
+          - >-
+            Start issued (nohup): {{
+              (file_changed and was_running) | ternary('yes', 'no')
+            }}
+          - "Status BEFORE: rc={{ status_before.rc }} stdout={{ (status_before.stdout | default('')) | trim }}"
+          - "Status AFTER : rc={{ status_after.rc }} stdout={{ (status_after.stdout  | default('')) | trim }}"
