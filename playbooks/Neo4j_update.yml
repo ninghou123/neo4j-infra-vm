@@ -4,30 +4,15 @@
   gather_facts: false
   serial: 1
   any_errors_fatal: true
-  
+
   become: "{{ neo4j_become }}"
   become_user: "{{ neo4j_become_user }}"
-  become_flags: "-i"
-
 
   vars_files:
     - "{{ playbook_dir }}/../inventories/vars.yml"
 
+  # Polling tunables (kept here for easy tweaking)
   vars:
-    neo4j_env:
-      neo4j_user: "neo4j"
-      neo4j_home: "{{ neo4j_home }}"
-      conf_dir: "{{ neo4j_home }}/conf"
-      conf_file: "neo4j.conf"
-      neo4j_ctl: "{{ neo4j_home }}/bin/neo4j"
-      conf_path: "{{ conf_dir }}/{{ conf_file }}"
-      JAVA_HOME: "{{ java_home }}"
-
-    desired_params:
-      - { key: "dbms.track_query_cpu_time",    value: "false" }
-      - { key: "dbms.track_query_memory_time", value: "false" }
-
-    # Polling tunables
     stop_retries: 30     # ~30s if delay=1
     stop_delay: 1
     start_retries: 120   # ~120s if delay=1
